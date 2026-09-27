@@ -86,6 +86,12 @@ impl Home {
             KeyCode::Up | KeyCode::Char('k') if n > 0 => self.list.select(Some(sel.saturating_sub(1))),
             KeyCode::Down | KeyCode::Char('j') if n > 0 => self.list.select(Some((sel + 1).min(n - 1))),
             KeyCode::Enter if n > 0 => return self.open(self.items[sel].path.clone()),
+            KeyCode::Char('R') | KeyCode::F(5) if n > 0 => {
+                return match self.open(self.items[sel].path.clone()) {
+                    Transition::Open(q, p) => Transition::Run(q, p),
+                    t => t,
+                };
+            }
             _ => {}
         }
         Transition::None
@@ -152,7 +158,7 @@ impl Home {
         );
         let hint = match &self.error {
             Some(e) => Line::styled(e.clone(), t.warn()),
-            None => hint_line(ctx, &[("Enter", "open"), ("n", "new quiz from a playlist"), ("o", "open file…"), ("q", "quit")]),
+            None => hint_line(ctx, &[("Enter", "open"), ("R", "run on quiz night"), ("n", "new quiz from a playlist"), ("o", "open file…"), ("q", "quit")]),
         };
         f.render_widget(Paragraph::new(hint), keys);
 
@@ -180,7 +186,7 @@ impl Home {
             crate::app::draw_keys(
                 f,
                 ctx,
-                &[("Home", &[("↑↓ j k", "select quiz"), ("Enter", "open it"), ("n", "new quiz from a playlist"), ("o", "open a file by path"), ("r", "refresh the list"), ("q", "quit")])],
+                &[("Home", &[("↑↓ j k", "select quiz"), ("Enter", "open it"), ("R F5", "run it (quiz night)"), ("n", "new quiz from a playlist"), ("o", "open a file by path"), ("r", "refresh the list"), ("q", "quit")])],
             );
         }
     }

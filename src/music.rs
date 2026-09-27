@@ -54,6 +54,9 @@ function run(argv) {
     t[0].delete();
     return '{}';
   }
+  if (cmd === 'resume') { M.play(); return '{}'; }
+  if (cmd === 'volume') { return JSON.stringify(M.soundVolume()); }
+  if (cmd === 'setvolume') { M.soundVolume = parseInt(argv[1], 10); return '{}'; }
   if (cmd === 'seek') { M.playerPosition = parseFloat(argv[1]); return '{}'; }
   if (cmd === 'pause') { if (M.running()) M.pause(); return '{}'; }
   throw new Error('unknown command ' + cmd);
@@ -132,6 +135,18 @@ pub fn remove_from_playlist(playlist_id: &str, track_id: &str) -> Result<()> {
 
 pub fn seek(position: f64) -> Result<()> {
     jxa(&["seek", &position.to_string()]).map(drop)
+}
+
+pub fn resume() -> Result<()> {
+    jxa(&["resume"]).map(drop)
+}
+
+pub fn volume() -> Result<i64> {
+    Ok(serde_json::from_str(&jxa(&["volume"])?)?)
+}
+
+pub fn set_volume(v: i64) -> Result<()> {
+    jxa(&["setvolume", &v.clamp(0, 100).to_string()]).map(drop)
 }
 
 pub fn pause() -> Result<()> {

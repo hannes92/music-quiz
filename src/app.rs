@@ -5,6 +5,7 @@ use crate::curation::Curation;
 use crate::home::Home;
 use crate::model::Quiz;
 use crate::picker::Picker;
+use crate::run::Run;
 use crate::theme::{DARK, Glyphs, Theme};
 use crate::worker::{Connection, Library, Player};
 use anyhow::Result;
@@ -29,25 +30,38 @@ pub enum Transition {
     Home,
     Picker,
     Open(Box<Quiz>, PathBuf),
+    Run(Box<Quiz>, PathBuf),
     Quit,
+}
+
+pub enum Start {
+    Home,
+    Edit(PathBuf),
+    Run(PathBuf),
 }
 
 enum Screen {
     Home(Home),
     Picker(Picker),
     Curation(Box<Curation>),
+    Run(Box<Run>),
 }
 
-pub fn run(open: Option<PathBuf>) -> Result<()> {
+pub fn run(start: Start) -> Result<()> {
     let config = Config::load();
     let mut ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, glyphs: config.glyphs(), tick: 0 };
-    let mut screen = match open {
-        Some(path) => {
+    let mut screen = match start {
+        Start::Edit(path) => {
             let quiz = Quiz::load(&path)?;
             config::remember(&path);
             Screen::Curation(Box::new(Curation::new(quiz, path, &ctx)))
         }
-        None => Screen::Home(Home::new()),
+        Start::Run(path) => {
+            let quiz = Quiz::load(&path)?;
+            config::remember(&path);
+            Screen::Run(Box::new(Run::new(quiz, path, &ctx)))
+        }
+        Start::Home => Screen::Home(Home::new()),
     };
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
@@ -57,6 +71,7 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
                 Screen::Home(_) => {}
                 Screen::Picker(p) => p.tick(&ctx),
                 Screen::Curation(c) => c.tick(&ctx),
+                Screen::Run(r) => r.tick(&ctx),
             }
             terminal.draw(|f| {
                 f.render_widget(Paragraph::new("").style(ctx.theme.base()), f.area());
@@ -64,6 +79,7 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
                     Screen::Home(h) => h.draw(f, &ctx),
                     Screen::Picker(p) => p.draw(f, &ctx),
                     Screen::Curation(c) => c.draw(f, &ctx),
+                    Screen::Run(r) => r.draw(f, &ctx),
                 }
             })?;
             if !event::poll(Duration::from_millis(80))? {
@@ -80,6 +96,7 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
                 Screen::Home(h) => h.key(k),
                 Screen::Picker(p) => p.key(k, &ctx),
                 Screen::Curation(c) => c.key(k, &ctx),
+                Screen::Run(r) => r.key(k, &ctx),
             };
             match t {
                 Transition::None => {}
@@ -95,6 +112,14 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
                 Transition::Open(q, path) => {
                     config::remember(&path);
                     screen = Screen::Curation(Box::new(Curation::new(*q, path, &ctx)));
+                }
+                Transition::Run(q, path) => {
+                    if let Screen::Curation(c) = &mut screen {
+                        c.flush();
+                    }
+                    ctx.player.stop();
+                    config::remember(&path);
+                    screen = Screen::Run(Box::new(Run::new(*q, path, &ctx)));
                 }
             }
         }

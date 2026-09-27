@@ -39,6 +39,9 @@ pub struct Defaults {
     pub clip_length: u32,
     pub rerun_length: u32,
     pub questions: Vec<String>,
+    /// Fade out the last seconds of each clip during the run.
+    #[serde(default = "yes")]
+    pub fade_out: bool,
     /// Prompt per question kind, overriding the built-in Swedish ones.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prompts: BTreeMap<String, String>,
@@ -50,9 +53,14 @@ impl Default for Defaults {
             clip_length: 30,
             rerun_length: 10,
             questions: vec!["artist".into(), "title".into()],
+            fade_out: true,
             prompts: BTreeMap::new(),
         }
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

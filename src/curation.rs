@@ -407,6 +407,10 @@ impl Curation {
                 return Transition::Home;
             }
             KeyCode::Char('?') => self.help = true,
+            KeyCode::F(5) => {
+                self.flush();
+                return Transition::Run(Box::new(self.quiz.clone()), self.path.clone());
+            }
             KeyCode::Char('/') => self.input = Some(Input::Find(String::new(), self.sel.min(self.quiz.entries.len().saturating_sub(1)))),
             KeyCode::Char(',') => self.settings = Some(Settings::new(&self.quiz.meta)),
             KeyCode::Char('S') => match &self.link {
@@ -1154,7 +1158,7 @@ fn draw_help(f: &mut Frame, ctx: &Ctx) {
         ("Play", &[("space", "play clip / stop"), ("p", "play from the start"), ("m", "mark clip start here"), ("[ ]  { }", "nudge start 1 s / 5 s"), ("- +", "clip length ±5 s"), ("← →", "seek ±5 s"), ("P", "auto-preview"), ("Esc", "stop")]),
         ("Rounds", &[("n", "new round above song"), ("r", "rename heading"), ("d", "remove heading")]),
         ("Questions", &[("Tab Enter", "questions pane"), ("a", "add question"), ("Enter", "edit question"), ("Del", "remove question"), ("Alt-↑↓", "reorder questions"), ("A", "artist + title to all")]),
-        ("Other", &[("X", "remove song from the playlist"), ("D", "delete removed song here"), ("S", "review playlist changes"), ("R", "relink to another playlist"), (",", "quiz settings")]),
+        ("Other", &[("X", "remove song from the playlist"), ("D", "delete removed song here"), ("S", "review playlist changes"), ("R", "relink to another playlist"), (",", "quiz settings"), ("F5", "run the quiz")]),
     ];
     crate::app::draw_keys(f, ctx, &groups);
 }
