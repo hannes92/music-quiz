@@ -31,6 +31,7 @@ pub struct Picker {
     moved_at: Instant,
     dialog: Option<NameDialog>,
     error: Option<String>,
+    help: bool,
 }
 
 const PREVIEW_SECS: f64 = 15.0;
@@ -47,6 +48,7 @@ impl Picker {
             moved_at: Instant::now(),
             dialog: None,
             error: None,
+            help: false,
         }
     }
 
@@ -80,6 +82,10 @@ impl Picker {
             }
             return Transition::None;
         }
+        if self.help {
+            self.help = false;
+            return Transition::None;
+        }
         if self.filtering {
             match k.code {
                 KeyCode::Esc => {
@@ -103,6 +109,7 @@ impl Picker {
             .map_or(0, |t| t.len());
         match (k.code, &self.focus) {
             (KeyCode::Char('q'), _) => return Transition::Quit,
+            (KeyCode::Char('?'), _) => self.help = true,
             (KeyCode::Esc, Focus::Tracks) | (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
                 self.focus = if self.focus == Focus::Playlists { Focus::Tracks } else { Focus::Playlists };
                 if self.tracks.selected().is_none() {
@@ -285,6 +292,25 @@ impl Picker {
 
         if let (Some(d), Some(p)) = (&self.dialog, cur.as_ref()) {
             self.draw_dialog(f, ctx, d, p);
+        }
+        if self.help {
+            crate::app::draw_keys(
+                f,
+                ctx,
+                &[(
+                    "Pick a playlist",
+                    &[
+                        ("↑↓ j k", "move"),
+                        ("/", "filter (letters in order)"),
+                        ("Tab", "switch to the track preview"),
+                        ("space", "play 15 s from 30% in"),
+                        ("Enter", "use this playlist"),
+                        ("r", "reload from Music.app"),
+                        ("Esc", "back to home"),
+                        ("q", "quit"),
+                    ],
+                )],
+            );
         }
     }
 
