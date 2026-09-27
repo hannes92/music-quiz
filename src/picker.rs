@@ -108,7 +108,10 @@ impl Picker {
             .and_then(|r| r.ok())
             .map_or(0, |t| t.len());
         match (k.code, &self.focus) {
-            (KeyCode::Char('q'), _) => return Transition::Quit,
+            (KeyCode::Char('q'), _) => {
+                ctx.player.stop();
+                return Transition::Home;
+            }
             (KeyCode::Char('?'), _) => self.help = true,
             (KeyCode::Esc, Focus::Tracks) | (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
                 self.focus = if self.focus == Focus::Playlists { Focus::Tracks } else { Focus::Playlists };
@@ -306,8 +309,7 @@ impl Picker {
                         ("space", "play 15 s from 30% in"),
                         ("Enter", "use this playlist"),
                         ("r", "reload from Music.app"),
-                        ("Esc", "back to home"),
-                        ("q", "quit"),
+                        ("Esc q", "back to home"),
                     ],
                 )],
             );

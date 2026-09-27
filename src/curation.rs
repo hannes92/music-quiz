@@ -524,7 +524,12 @@ impl Curation {
                 self.auto_preview = !self.auto_preview;
                 self.moved();
             }
-            KeyCode::Esc => ctx.player.stop(),
+            // Esc stops playback first; with nothing playing it goes back home.
+            KeyCode::Esc if ctx.player.is_active() => ctx.player.stop(),
+            KeyCode::Esc => {
+                self.flush();
+                return Transition::Home;
+            }
             _ => {}
         }
         Transition::None
@@ -783,6 +788,7 @@ impl Curation {
                     ("/", "find"),
                     (",", "settings"),
                     ("?", "help"),
+                    ("Esc", "home"),
                 ],
             ),
         };
@@ -1143,7 +1149,7 @@ fn entry_name(e: &Entry) -> String {
 
 fn draw_help(f: &mut Frame, ctx: &Ctx) {
     let groups: [(&str, &[(&str, &str)]); 6] = [
-        ("Move", &[("↑↓ j k", "select"), ("g G", "top / bottom"), ("/", "find song"), ("q", "save, back to home")]),
+        ("Move", &[("↑↓ j k", "select"), ("g G", "top / bottom"), ("/", "find song"), ("Esc q", "back to home (Esc stops music first)")]),
         ("Order", &[("J K", "move song down / up"), ("x  p", "cut, then paste below"), ("o", "order menu for this round"), ("s", "skip song"), ("u  Ctrl-R", "undo / redo")]),
         ("Play", &[("space", "play clip / stop"), ("p", "play from the start"), ("m", "mark clip start here"), ("[ ]  { }", "nudge start 1 s / 5 s"), ("- +", "clip length ±5 s"), ("← →", "seek ±5 s"), ("P", "auto-preview"), ("Esc", "stop")]),
         ("Rounds", &[("n", "new round above song"), ("r", "rename heading"), ("d", "remove heading")]),
