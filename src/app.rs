@@ -129,6 +129,7 @@ pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
+    use crate::curation::Curation;
     use ratatui::{Terminal, backend::TestBackend};
 
     fn dump(term: &Terminal<TestBackend>) -> String {
@@ -207,5 +208,99 @@ mod tests {
         cur.flush();
         println!("{}", std::fs::read_to_string(&path).unwrap().lines().take(40).collect::<Vec<_>>().join("\n"));
         std::fs::remove_file(&path).unwrap();
+    }
+
+    fn fake_quiz() -> Quiz {
+        let track = |id: &str, title: &str| crate::music::Track {
+            id: id.into(),
+            title: title.into(),
+            artist: "Harold Faltermeyer".into(),
+            album: "Beverly Hills Cop".into(),
+            year: 1984,
+            duration: 180.0,
+        };
+        let pl = crate::music::Playlist { id: "NOPE".into(), name: "Fake".into(), folder: String::new(), smart: false, duration: 0.0, count: 2 };
+        Quiz::new("Fake", &pl, &[track("1", "Axel F"), track("2", "The Heat Is On")])
+    }
+
+    #[test]
+    fn question_editor_adds_edits_and_reorders() {
+        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, tick: 0 };
+        let dir = std::env::temp_dir().join(format!("mq-q-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fake.quiz.toml");
+        let mut cur = Curation::new(fake_quiz(), path.clone(), &ctx);
+        let key = |c: KeyCode| KeyEvent::from(c);
+        let press = |cur: &mut Curation, keys: &[KeyEvent]| {
+            for k in keys {
+                cur.key(*k, &ctx);
+            }
+        };
+        let chars = |s: &str| s.chars().map(|c| key(KeyCode::Char(c))).collect::<Vec<_>>();
+        // Artist question, accepted as prefilled.
+        press(&mut cur, &[key(KeyCode::Char('a')), key(KeyCode::Char('1')), key(KeyCode::Enter)]);
+        // Custom question with a hint line, answer and 1.5 points.
+        press(&mut cur, &[key(KeyCode::Char('a')), key(KeyCode::Char('5'))]);
+        press(&mut cur, &chars("Vilken film?"));
+        press(&mut cur, &[key(KeyCode::Enter)]);
+        press(&mut cur, &chars("(hint: Eddie Murphy)"));
+        press(&mut cur, &[key(KeyCode::Tab)]);
+        press(&mut cur, &chars("Snuten i Hollywood"));
+        press(&mut cur, &[key(KeyCode::Tab), key(KeyCode::Right)]);
+        press(&mut cur, &[KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)]);
+        // Move the custom question first, then add a year question and cancel it.
+        press(&mut cur, &[KeyEvent::new(KeyCode::Up, KeyModifiers::ALT), key(KeyCode::Esc)]);
+        press(&mut cur, &[key(KeyCode::Char('a')), key(KeyCode::Char('3')), key(KeyCode::Esc)]);
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        press(&mut cur, &[key(KeyCode::Tab)]);
+        term.draw(|f| cur.draw(f, &ctx)).unwrap();
+        println!("{}", dump(&term));
+        cur.flush();
+        let text = std::fs::read_to_string(&path).unwrap();
+        println!("{text}");
+        let back = Quiz::load(&path).unwrap();
+        let qs = &back.songs().next().unwrap().questions;
+        assert_eq!(qs.len(), 2);
+        assert_eq!(qs[0].prompt, "Vilken film?\n(hint: Eddie Murphy)");
+        assert_eq!(qs[0].answer, "Snuten i Hollywood");
+        assert_eq!(qs[0].points, 1.5);
+        assert_eq!(qs[1].answer, "Harold Faltermeyer");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Removes a song from a scratch playlist in Music.app, then deletes the scratch playlist.
+    /// Run with: cargo test removes -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn removes_song_from_scratch_playlist() {
+        let script = |js: &str| {
+            let out = std::process::Command::new("osascript").args(["-l", "JavaScript", "-e", js]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let pl = script(r#"const M = Application("Music");
+            const src = M.userPlaylists.whose({name: "Midsommarquiz 2024"})[0];
+            const tmp = M.make({new: "userPlaylist", withProperties: {name: "mq scratch test"}});
+            M.duplicate(src.tracks[0], {to: tmp}); M.duplicate(src.tracks[1], {to: tmp});
+            tmp.persistentID()"#);
+        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, tick: 0 };
+        ctx.lib.load_playlists();
+        wait(|| ctx.lib.playlists().is_some());
+        let playlist = ctx.lib.playlists().unwrap().unwrap().into_iter().find(|p| p.id == pl).unwrap();
+        let tracks = crate::music::tracks(&pl).unwrap();
+        let path = std::env::temp_dir().join(format!("mq-rm-{}.quiz.toml", std::process::id()));
+        let mut cur = Curation::new(Quiz::new("Scratch", &playlist, &tracks), path.clone(), &ctx);
+        wait(|| ctx.lib.tracks(&pl).is_some());
+        cur.tick(&ctx);
+        cur.key(KeyEvent::from(KeyCode::Char('X')), &ctx);
+        cur.key(KeyEvent::from(KeyCode::Char('y')), &ctx);
+        let left = crate::music::tracks(&pl).unwrap();
+        script(&format!(r#"Application("Music").userPlaylists.whose({{persistentID: "{pl}"}})[0].delete()"#));
+        cur.flush();
+        let back = Quiz::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, tracks[1].id);
+        assert_eq!(back.songs().count(), 1);
+        assert_eq!(back.removed.len(), 1);
     }
 }

@@ -47,6 +47,13 @@ function run(argv) {
     t[0].play();
     return '{}';
   }
+  if (cmd === 'remove') {
+    // Removes the song from this playlist only; the library is untouched.
+    const t = playlist(argv[1]).tracks.whose({persistentID: argv[2]});
+    if (t.length === 0) throw new Error('track not in playlist: ' + argv[2]);
+    t[0].delete();
+    return '{}';
+  }
   if (cmd === 'seek') { M.playerPosition = parseFloat(argv[1]); return '{}'; }
   if (cmd === 'pause') { if (M.running()) M.pause(); return '{}'; }
   throw new Error('unknown command ' + cmd);
@@ -117,6 +124,10 @@ pub fn status() -> Result<Status> {
 
 pub fn play(playlist_id: &str, track_id: &str) -> Result<()> {
     jxa(&["play", playlist_id, track_id]).map(drop)
+}
+
+pub fn remove_from_playlist(playlist_id: &str, track_id: &str) -> Result<()> {
+    jxa(&["remove", playlist_id, track_id]).map(drop)
 }
 
 pub fn seek(position: f64) -> Result<()> {

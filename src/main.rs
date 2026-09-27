@@ -8,6 +8,7 @@ mod curation;
 mod model;
 mod music;
 mod picker;
+mod questions;
 mod theme;
 mod worker;
 
