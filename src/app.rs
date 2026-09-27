@@ -1,15 +1,18 @@
 //! Screen switching, the event loop and helpers shared by the screens.
 
+use crate::config::{self, Config};
 use crate::curation::Curation;
+use crate::home::Home;
 use crate::model::Quiz;
 use crate::picker::Picker;
-use crate::theme::{DARK, Theme};
+use crate::theme::{DARK, Glyphs, Theme};
 use crate::worker::{Connection, Library, Player};
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::Frame;
+use ratatui::widgets::{Clear, Paragraph};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -17,37 +20,48 @@ pub struct Ctx {
     pub player: Player,
     pub lib: Library,
     pub theme: &'static Theme,
+    pub glyphs: &'static Glyphs,
     pub tick: u64,
 }
 
 pub enum Transition {
     None,
+    Home,
+    Picker,
     Open(Box<Quiz>, PathBuf),
     Quit,
 }
 
 enum Screen {
+    Home(Home),
     Picker(Picker),
     Curation(Box<Curation>),
 }
 
 pub fn run(open: Option<PathBuf>) -> Result<()> {
-    let mut ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, tick: 0 };
+    let config = Config::load();
+    let mut ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, glyphs: config.glyphs(), tick: 0 };
     let mut screen = match open {
-        Some(path) => Screen::Curation(Box::new(Curation::new(Quiz::load(&path)?, path, &ctx))),
-        None => Screen::Picker(Picker::new(&ctx)),
+        Some(path) => {
+            let quiz = Quiz::load(&path)?;
+            config::remember(&path);
+            Screen::Curation(Box::new(Curation::new(quiz, path, &ctx)))
+        }
+        None => Screen::Home(Home::new()),
     };
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
         loop {
             ctx.tick += 1;
             match &mut screen {
+                Screen::Home(_) => {}
                 Screen::Picker(p) => p.tick(&ctx),
                 Screen::Curation(c) => c.tick(&ctx),
             }
             terminal.draw(|f| {
                 f.render_widget(Paragraph::new("").style(ctx.theme.base()), f.area());
                 match &mut screen {
+                    Screen::Home(h) => h.draw(f, &ctx),
                     Screen::Picker(p) => p.draw(f, &ctx),
                     Screen::Curation(c) => c.draw(f, &ctx),
                 }
@@ -63,13 +77,25 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
                 break;
             }
             let t = match &mut screen {
+                Screen::Home(h) => h.key(k),
                 Screen::Picker(p) => p.key(k, &ctx),
                 Screen::Curation(c) => c.key(k, &ctx),
             };
             match t {
                 Transition::None => {}
                 Transition::Quit => break,
-                Transition::Open(q, path) => screen = Screen::Curation(Box::new(Curation::new(*q, path, &ctx))),
+                Transition::Home => {
+                    if let Screen::Curation(c) = &mut screen {
+                        c.flush();
+                    }
+                    ctx.player.stop();
+                    screen = Screen::Home(Home::new());
+                }
+                Transition::Picker => screen = Screen::Picker(Picker::new(&ctx)),
+                Transition::Open(q, path) => {
+                    config::remember(&path);
+                    screen = Screen::Curation(Box::new(Curation::new(*q, path, &ctx)));
+                }
             }
         }
         Ok(())
@@ -85,12 +111,12 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
 }
 
 pub fn music_badge(ctx: &Ctx) -> Span<'static> {
-    let t = ctx.theme;
+    let (t, g) = (ctx.theme, ctx.glyphs);
     match ctx.player.view().connection {
-        Connection::Connected => Span::styled("● Music.app", t.accent()),
-        Connection::Unknown => Span::styled("○ Music.app", t.dim()),
-        Connection::NotRunning => Span::styled("○ Music.app not running", t.dim()),
-        Connection::Error(e) => Span::styled(format!("✗ {e}"), t.warn()),
+        Connection::Connected => Span::styled(format!("{} Music.app", g.on), t.accent()),
+        Connection::Unknown => Span::styled(format!("{} Music.app", g.off), t.dim()),
+        Connection::NotRunning => Span::styled(format!("{} Music.app not running", g.off), t.dim()),
+        Connection::Error(e) => Span::styled(format!("{} {e}", g.error), t.warn()),
     }
 }
 
@@ -119,6 +145,22 @@ pub fn hint_line(ctx: &Ctx, keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Centered key overview for `?`: groups of (keys, what they do).
+pub fn draw_keys(f: &mut Frame, ctx: &Ctx, groups: &[(&str, &[(&str, &str)])]) {
+    let t = ctx.theme;
+    let mut lines = Vec::new();
+    for (g, keys) in groups {
+        lines.push(Line::styled(g.to_string(), t.accent()));
+        for (k, what) in *keys {
+            lines.push(Line::from(vec![Span::styled(format!("  {k:<11}"), t.key()), Span::raw(what.to_string())]));
+        }
+    }
+    lines.push(Line::styled("any key closes", t.dim()));
+    let area = centered(f.area(), 56, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(t.frame(" Keys ", true)), area);
+}
+
 pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
@@ -130,6 +172,7 @@ mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
     use crate::curation::Curation;
+    use crate::home::Home;
     use ratatui::{Terminal, backend::TestBackend};
 
     fn dump(term: &Terminal<TestBackend>) -> String {
@@ -155,7 +198,7 @@ mod tests {
     #[test]
     #[ignore]
     fn screens_against_music_app() {
-        let mut ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, tick: 3 };
+        let mut ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, glyphs: &crate::theme::UNICODE, tick: 3 };
         let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
         let key = |c: KeyCode| KeyEvent::from(c);
 
@@ -225,7 +268,7 @@ mod tests {
 
     #[test]
     fn question_editor_adds_edits_and_reorders() {
-        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, tick: 0 };
+        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, glyphs: &crate::theme::UNICODE, tick: 0 };
         let dir = std::env::temp_dir().join(format!("mq-q-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("fake.quiz.toml");
@@ -282,7 +325,7 @@ mod tests {
             const tmp = M.make({new: "userPlaylist", withProperties: {name: "mq scratch test"}});
             M.duplicate(src.tracks[0], {to: tmp}); M.duplicate(src.tracks[1], {to: tmp});
             tmp.persistentID()"#);
-        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, tick: 0 };
+        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, glyphs: &crate::theme::UNICODE, tick: 0 };
         ctx.lib.load_playlists();
         wait(|| ctx.lib.playlists().is_some());
         let playlist = ctx.lib.playlists().unwrap().unwrap().into_iter().find(|p| p.id == pl).unwrap();
@@ -301,6 +344,81 @@ mod tests {
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].id, tracks[1].id);
         assert_eq!(back.songs().count(), 1);
+        assert_eq!(back.removed.len(), 1);
+    }
+
+    /// Review, relink by name, settings, find and home against the real
+    /// Midsommarquiz 2024 playlist (read-only).
+    /// Run with: cargo test completes -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn completes_curation_against_music_app() {
+        use crate::model::{Entry, Song};
+        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &DARK, glyphs: &crate::theme::UNICODE, tick: 3 };
+        let mut term = Terminal::new(TestBackend::new(120, 34)).unwrap();
+        let key = |c: KeyCode| KeyEvent::from(c);
+
+        let mut home = Home::new();
+        term.draw(|f| home.draw(f, &ctx)).unwrap();
+        println!("{}\n", dump(&term));
+        home.key(key(KeyCode::Char('?')));
+        term.draw(|f| home.draw(f, &ctx)).unwrap();
+        println!("{}\n", dump(&term));
+
+        ctx.lib.load_playlists();
+        wait(|| ctx.lib.playlists().is_some());
+        let pl = ctx.lib.playlists().unwrap().unwrap().into_iter().find(|p| p.name == "Midsommarquiz 2024").unwrap();
+        let tracks = crate::music::tracks(&pl.id).unwrap();
+        let mut quiz = Quiz::new("Review test", &pl, &tracks);
+        quiz.entries.remove(0); // comes back as added
+        if let Entry::Song(s) = &mut quiz.entries[0] {
+            s.track_id = "DEADBEEFDEADBEEF".into(); // same song, stale ID: re-linked
+        }
+        let mut ghost = Song::from_track(&tracks[0]);
+        ghost.track_id = "0000000000000000".into();
+        ghost.title = "Ghost song".into();
+        quiz.entries.push(Entry::Song(ghost)); // not in playlist: removed
+        quiz.meta.source.playlist_id = "FFFFFFFFFFFFFFFF".into(); // found again by name
+        let path = std::env::temp_dir().join(format!("mq-review-{}.quiz.toml", std::process::id()));
+        let mut cur = Curation::new(quiz, path.clone(), &ctx);
+        for _ in 0..100 {
+            cur.tick(&ctx);
+            term.draw(|f| cur.draw(f, &ctx)).unwrap();
+            if dump(&term).contains("S review") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        cur.key(key(KeyCode::Char('S')), &ctx);
+        term.draw(|f| cur.draw(f, &ctx)).unwrap();
+        println!("{}\n", dump(&term));
+        cur.key(key(KeyCode::Enter), &ctx);
+
+        cur.key(key(KeyCode::Char(',')), &ctx);
+        cur.key(key(KeyCode::Down), &ctx);
+        for c in "Film/TV-serier".chars() {
+            cur.key(key(KeyCode::Char(c)), &ctx);
+        }
+        term.draw(|f| cur.draw(f, &ctx)).unwrap();
+        println!("{}\n", dump(&term));
+        cur.key(key(KeyCode::Enter), &ctx);
+
+        cur.key(key(KeyCode::Char('/')), &ctx);
+        for c in "danger".chars() {
+            cur.key(key(KeyCode::Char(c)), &ctx);
+        }
+        term.draw(|f| cur.draw(f, &ctx)).unwrap();
+        println!("{}\n", dump(&term));
+        cur.key(key(KeyCode::Enter), &ctx);
+        cur.flush();
+        let back = Quiz::load(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(back.meta.source.playlist_id, pl.id);
+        assert_eq!(back.meta.subtitle.as_deref(), Some("Film/TV-serier"));
+        let ids: Vec<&str> = back.songs().map(|s| s.track_id.as_str()).collect();
+        assert_eq!(ids.len(), tracks.len());
+        assert!(ids.contains(&tracks[1].id.as_str()));
+        assert_eq!(ids.last(), Some(&tracks[0].id.as_str()));
         assert_eq!(back.removed.len(), 1);
     }
 }

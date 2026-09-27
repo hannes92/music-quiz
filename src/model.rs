@@ -3,7 +3,7 @@
 use crate::music::{Playlist, Track};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,11 +39,19 @@ pub struct Defaults {
     pub clip_length: u32,
     pub rerun_length: u32,
     pub questions: Vec<String>,
+    /// Prompt per question kind, overriding the built-in Swedish ones.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prompts: BTreeMap<String, String>,
 }
 
 impl Default for Defaults {
     fn default() -> Self {
-        Defaults { clip_length: 30, rerun_length: 10, questions: vec!["artist".into(), "title".into()] }
+        Defaults {
+            clip_length: 30,
+            rerun_length: 10,
+            questions: vec!["artist".into(), "title".into()],
+            prompts: BTreeMap::new(),
+        }
     }
 }
 
@@ -202,6 +210,43 @@ impl Quiz {
         (added, removed_now)
     }
 
+    /// What `sync` would change, plus songs whose track ID stopped resolving but
+    /// match a playlist track on title, artist and length (another Mac, a
+    /// library rebuild). Nothing changes until `apply_sync`.
+    pub fn plan_sync(&self, tracks: &[Track]) -> SyncPlan {
+        let in_playlist: HashSet<&str> = tracks.iter().map(|t| t.id.as_str()).collect();
+        let in_quiz: HashSet<&str> = self.songs().map(|s| s.track_id.as_str()).collect();
+        let mut candidates: Vec<&Track> = tracks.iter().filter(|t| !in_quiz.contains(t.id.as_str())).collect();
+        let mut relinks = Vec::new();
+        let mut removed = Vec::new();
+        for s in self.songs().filter(|s| !in_playlist.contains(s.track_id.as_str())) {
+            let same = |t: &&Track| {
+                t.title.eq_ignore_ascii_case(&s.title)
+                    && t.artist.eq_ignore_ascii_case(&s.artist)
+                    && (t.duration.round() as i64 - s.duration as i64).abs() <= 2
+            };
+            match candidates.iter().position(same) {
+                Some(i) => relinks.push((s.track_id.clone(), candidates.remove(i).clone())),
+                None => removed.push(s.clone()),
+            }
+        }
+        SyncPlan { added: candidates.into_iter().cloned().collect(), removed, relinks }
+    }
+
+    /// Apply a reviewed plan. Returns the track IDs of added songs.
+    pub fn apply_sync(&mut self, plan: &SyncPlan, tracks: &[Track]) -> Vec<String> {
+        for (old, t) in &plan.relinks {
+            for e in &mut self.entries {
+                if let Entry::Song(s) = e
+                    && s.track_id == *old
+                {
+                    s.track_id = t.id.clone();
+                }
+            }
+        }
+        self.sync(tracks).0
+    }
+
     pub fn songs(&self) -> impl Iterator<Item = &Song> {
         self.entries.iter().filter_map(|e| match e {
             Entry::Song(s) => Some(s),
@@ -222,6 +267,20 @@ impl Quiz {
                 _ => None,
             })
             .collect()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SyncPlan {
+    pub added: Vec<Track>,
+    pub removed: Vec<Song>,
+    /// (old track ID, the playlist track it matches)
+    pub relinks: Vec<(String, Track)>,
+}
+
+impl SyncPlan {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.relinks.is_empty()
     }
 }
 
@@ -315,6 +374,22 @@ mod tests {
         assert_eq!(added, vec!["2".to_string()]);
         assert!(q.removed.is_empty());
         assert_eq!(q.songs().last().unwrap().questions.len(), 1);
+    }
+
+    #[test]
+    fn plan_sync_relinks_same_song_with_new_id() {
+        let mut q = Quiz::new("Q", &playlist(), &[track("1"), track("2")]);
+        let mut moved = track("9");
+        moved.title = "2".into();
+        let plan = q.plan_sync(&[track("1"), moved.clone(), track("3")]);
+        assert_eq!(plan.relinks.len(), 1);
+        assert_eq!(plan.relinks[0].0, "2");
+        assert_eq!(plan.added.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["3"]);
+        assert!(plan.removed.is_empty());
+        let added = q.apply_sync(&plan, &[track("1"), moved, track("3")]);
+        assert_eq!(added, vec!["3".to_string()]);
+        let ids: Vec<&str> = q.songs().map(|s| s.track_id.as_str()).collect();
+        assert_eq!(ids, vec!["1", "9", "3"]);
     }
 
     #[test]

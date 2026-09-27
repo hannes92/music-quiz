@@ -109,7 +109,10 @@ impl Picker {
                     self.tracks.select(Some(0));
                 }
             }
-            (KeyCode::Esc, Focus::Playlists) => ctx.player.stop(),
+            (KeyCode::Esc, Focus::Playlists) => {
+                ctx.player.stop();
+                return Transition::Home;
+            }
             (KeyCode::Char('/'), _) => {
                 self.filtering = true;
                 self.focus = Focus::Playlists;
@@ -222,7 +225,7 @@ impl Picker {
                 .collect(),
         };
         f.render_stateful_widget(
-            List::new(items).block(block).highlight_style(t.selected()).highlight_symbol("▶ "),
+            List::new(items).block(block).highlight_style(t.selected()).highlight_symbol(format!("{} ", ctx.glyphs.cursor)),
             left,
             &mut self.list,
         );
@@ -239,7 +242,7 @@ impl Picker {
                     .enumerate()
                     .map(|(i, tr)| {
                         let playing = ctx.player.is_active() && v.track_id.as_deref() == Some(&tr.id);
-                        let num = if playing { format!("♪{}", i + 1) } else { format!("{}", i + 1) };
+                        let num = if playing { format!("{}{}", ctx.glyphs.playing, i + 1) } else { format!("{}", i + 1) };
                         let row = Row::new(vec![
                             num,
                             tr.title.clone(),
@@ -275,7 +278,7 @@ impl Picker {
         } else {
             hint_line(
                 ctx,
-                &[("↑↓", "move"), ("/", "filter"), ("Tab", "preview pane"), ("space", "play 15s"), ("Enter", "use this playlist"), ("r", "reload"), ("q", "quit")],
+                &[("↑↓", "move"), ("/", "filter"), ("Tab", "preview pane"), ("space", "play 15s"), ("Enter", "use this playlist"), ("r", "reload"), ("Esc", "back")],
             )
         };
         f.render_widget(Paragraph::new(hint).style(t.base()), foot);

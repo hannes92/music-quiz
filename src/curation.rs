@@ -1,7 +1,9 @@
 //! Curation screen: running order, rounds and clip marking for one quiz.
 
 use crate::app::{Ctx, Transition, centered, header_line, hint_line, music_badge};
-use crate::model::{Entry, Quiz, Song};
+use crate::model::{Entry, Quiz, Song, SyncPlan};
+use crate::music::Track;
+use crate::settings::{self, Settings};
 use crate::music;
 use crate::picker::truncate;
 use crate::questions::{self, Editor, Outcome, fmt_points};
@@ -19,6 +21,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 enum Input {
     NewRound(String),
     Rename(String),
+    /// `/`: the query and where the cursor was before searching.
+    Find(String, usize),
+}
+
+/// Where we are in matching the quiz to its Music.app playlist.
+enum Link {
+    Loading,
+    /// Loaded; `None` when in sync, otherwise changes waiting for review.
+    Loaded(Option<(SyncPlan, Vec<Track>)>),
+    /// The playlist ID didn't resolve; looking the playlist up by name.
+    ByName,
+    Missing(String),
 }
 
 enum Save {
@@ -50,8 +64,12 @@ pub struct Curation {
     help: bool,
     auto_preview: bool,
     preview_due: Option<Instant>,
-    synced: bool,
-    sync_msg: Option<(String, bool)>,
+    link: Link,
+    review: bool,
+    /// `R`: choosing another playlist; the index into the playlist list.
+    relink: Option<usize>,
+    settings: Option<Settings>,
+    focus_at: Instant,
     msg: Option<(String, Instant)>,
 }
 
@@ -77,8 +95,11 @@ impl Curation {
             help: false,
             auto_preview: false,
             preview_due: None,
-            synced: false,
-            sync_msg: None,
+            link: Link::Loading,
+            review: false,
+            relink: None,
+            settings: None,
+            focus_at: Instant::now(),
             msg: None,
         }
     }
@@ -134,27 +155,7 @@ impl Curation {
     }
 
     pub fn tick(&mut self, ctx: &Ctx) {
-        if !self.synced
-            && let Some(r) = ctx.lib.tracks(&self.playlist_id())
-        {
-            self.synced = true;
-            self.sync_msg = Some(match r {
-                Ok(tracks) => {
-                    let before = (self.quiz.entries.clone(), self.quiz.removed.clone());
-                    let (added, removed) = self.quiz.sync(&tracks);
-                    if added.is_empty() && removed == 0 {
-                        ("⟳ playlist in sync".into(), false)
-                    } else {
-                        self.undo.push(before);
-                        self.save = Save::Dirty(Instant::now());
-                        let n = added.len();
-                        self.new_ids.extend(added);
-                        (format!("⟳ playlist changed +{n} −{removed}"), true)
-                    }
-                }
-                Err(e) => (format!("✗ playlist: {e}"), true),
-            });
-        }
+        self.tick_link(ctx);
         if let Save::Dirty(at) = self.save
             && at.elapsed() > Duration::from_secs(1)
         {
@@ -170,8 +171,71 @@ impl Curation {
         }
     }
 
+    /// Re-read the playlist on open. Changes wait for review (`S`); a playlist
+    /// whose ID no longer resolves is looked up by name, then left to `R`.
+    fn tick_link(&mut self, ctx: &Ctx) {
+        match &self.link {
+            Link::Loading => {
+                let Some(r) = ctx.lib.tracks(&self.playlist_id()) else { return };
+                self.link = match r {
+                    Ok(tracks) => {
+                        let plan = self.quiz.plan_sync(&tracks);
+                        Link::Loaded((!plan.is_empty()).then_some((plan, tracks)))
+                    }
+                    Err(_) => {
+                        ctx.lib.load_playlists();
+                        Link::ByName
+                    }
+                };
+            }
+            Link::ByName => {
+                let Some(r) = ctx.lib.playlists() else { return };
+                let name = self.quiz.meta.source.playlist.clone();
+                match r.map(|all| all.into_iter().find(|p| p.name == name)) {
+                    Ok(Some(p)) => {
+                        self.flash(format!("Playlist found by name: {}", p.path()));
+                        self.link_playlist(ctx, &p);
+                    }
+                    Ok(None) => self.link = Link::Missing(format!("playlist \"{name}\" not found")),
+                    Err(e) => self.link = Link::Missing(e),
+                }
+            }
+            Link::Loaded(_) | Link::Missing(_) => {}
+        }
+    }
+
+    fn link_playlist(&mut self, ctx: &Ctx, p: &crate::music::Playlist) {
+        let src = &mut self.quiz.meta.source;
+        src.playlist = p.name.clone();
+        src.playlist_id = p.id.clone();
+        src.folder = p.folder.clone();
+        self.save = Save::Dirty(Instant::now());
+        ctx.lib.load_tracks(&p.id, true);
+        self.link = Link::Loading;
+    }
+
+    fn apply_review(&mut self) {
+        let Link::Loaded(Some((plan, tracks))) = std::mem::replace(&mut self.link, Link::Loaded(None)) else { return };
+        self.checkpoint();
+        let added = self.quiz.apply_sync(&plan, &tracks);
+        self.new_ids.extend(added);
+        self.flash(format!(
+            "Playlist synced: {} added, {} moved to \"not in playlist\", {} re-linked",
+            plan.added.len(),
+            plan.removed.len(),
+            plan.relinks.len()
+        ));
+    }
+
+    fn set_focus(&mut self, q: Option<usize>) {
+        if q.is_some() != self.q_sel.is_some() {
+            self.focus_at = Instant::now();
+        }
+        self.q_sel = q;
+    }
+
     fn moved(&mut self) {
-        self.q_sel = None;
+        self.set_focus(None);
         if self.auto_preview {
             self.preview_due = Some(Instant::now() + Duration::from_millis(700));
         }
@@ -191,9 +255,32 @@ impl Curation {
     }
 
     pub fn key(&mut self, k: KeyEvent, ctx: &Ctx) -> Transition {
+        if let Some(Input::Find(query, from)) = &mut self.input {
+            let from = *from;
+            match k.code {
+                KeyCode::Esc => {
+                    self.sel = from;
+                    self.input = None;
+                }
+                KeyCode::Enter => self.input = None,
+                KeyCode::Backspace => drop(query.pop()),
+                KeyCode::Char(c) => query.push(c),
+                _ => {}
+            }
+            if let Some(Input::Find(query, _)) = &self.input {
+                let q = query.to_lowercase();
+                let n = self.quiz.entries.len();
+                let hit = (0..n).map(|i| (from + i) % n).find(|&i| match &self.quiz.entries[i] {
+                    Entry::Song(s) => !q.is_empty() && (s.title.to_lowercase().contains(&q) || s.artist.to_lowercase().contains(&q)),
+                    Entry::Heading(_) => false,
+                });
+                self.sel = hit.unwrap_or(from);
+            }
+            return Transition::None;
+        }
         if let Some(input) = &mut self.input {
             let text = match input {
-                Input::NewRound(t) | Input::Rename(t) => t,
+                Input::NewRound(t) | Input::Rename(t) | Input::Find(t, _) => t,
             };
             match k.code {
                 KeyCode::Esc => self.input = None,
@@ -208,6 +295,7 @@ impl Curation {
                             self.sel += 1;
                         }
                         Input::Rename(t) => self.quiz.entries[self.sel] = Entry::Heading(t),
+                        Input::Find(..) => {}
                     }
                 }
                 _ => {}
@@ -220,6 +308,46 @@ impl Curation {
         }
         if self.editor.is_some() {
             self.editor_key(k);
+            return Transition::None;
+        }
+        if let Some(st) = &mut self.settings {
+            match st.key(k) {
+                settings::Outcome::Editing => {}
+                settings::Outcome::Cancel => self.settings = None,
+                settings::Outcome::Save => {
+                    let st = self.settings.take().unwrap();
+                    st.apply(&mut self.quiz.meta);
+                    self.save = Save::Dirty(Instant::now());
+                    self.flash("Settings saved");
+                }
+            }
+            return Transition::None;
+        }
+        if self.review {
+            self.review = false;
+            if k.code == KeyCode::Enter {
+                self.apply_review();
+            }
+            return Transition::None;
+        }
+        if let Some(i) = self.relink {
+            let lists: Vec<_> = match ctx.lib.playlists() {
+                Some(Ok(l)) => l,
+                _ => Vec::new(),
+            };
+            match k.code {
+                KeyCode::Esc => self.relink = None,
+                KeyCode::Up | KeyCode::Char('k') => self.relink = Some(i.saturating_sub(1)),
+                KeyCode::Down | KeyCode::Char('j') => self.relink = Some((i + 1).min(lists.len().saturating_sub(1))),
+                KeyCode::Enter => {
+                    if let Some(p) = lists.get(i) {
+                        self.relink = None;
+                        self.flash(format!("Linked to {}: changes show up for review (S)", p.path()));
+                        self.link_playlist(ctx, p);
+                    }
+                }
+                _ => {}
+            }
             return Transition::None;
         }
         if let Some(i) = self.add_picker {
@@ -242,7 +370,7 @@ impl Curation {
             if let (Some(c), Some(s)) = (choice, self.song().cloned()) {
                 self.add_picker = None;
                 let album = self.albums(ctx).remove(&s.track_id).unwrap_or_default();
-                let q = questions::prefilled(questions::KINDS[c].0, &s, &album);
+                let q = questions::prefilled(questions::KINDS[c].0, &s, &album, &self.quiz.meta.defaults.prompts);
                 self.editor = Some(Editor::new(q, None));
             }
             return Transition::None;
@@ -276,9 +404,20 @@ impl Curation {
         match k.code {
             KeyCode::Char('q') => {
                 self.flush();
-                return Transition::Quit;
+                return Transition::Home;
             }
             KeyCode::Char('?') => self.help = true,
+            KeyCode::Char('/') => self.input = Some(Input::Find(String::new(), self.sel.min(self.quiz.entries.len().saturating_sub(1)))),
+            KeyCode::Char(',') => self.settings = Some(Settings::new(&self.quiz.meta)),
+            KeyCode::Char('S') => match &self.link {
+                Link::Loaded(Some(_)) => self.review = true,
+                Link::Loaded(None) => self.flash("The playlist has no changes"),
+                _ => self.flash("Still reading the playlist"),
+            },
+            KeyCode::Char('R') => {
+                ctx.lib.load_playlists();
+                self.relink = Some(0);
+            }
             KeyCode::Up | KeyCode::Char('k') if self.sel > 0 => {
                 self.sel -= 1;
                 self.moved();
@@ -354,7 +493,7 @@ impl Curation {
                 if self.song().is_some_and(|s| s.questions.is_empty()) {
                     self.flash("No questions yet: a adds one");
                 } else {
-                    self.q_sel = Some(0);
+                    self.set_focus(Some(0));
                 }
             }
             KeyCode::Char('X') if in_entries && self.song().is_some() => self.confirm_remove = true,
@@ -445,7 +584,7 @@ impl Curation {
         let count = self.song().map_or(0, |s| s.questions.len());
         let alt = k.modifiers.contains(KeyModifiers::ALT);
         match k.code {
-            KeyCode::Tab | KeyCode::Esc => self.q_sel = None,
+            KeyCode::Tab | KeyCode::Esc => self.set_focus(None),
             KeyCode::Up if alt && qi > 0 => {
                 self.checkpoint();
                 self.song_mut().unwrap().questions.swap(qi, qi - 1);
@@ -466,7 +605,7 @@ impl Curation {
             KeyCode::Delete | KeyCode::Backspace if qi < count => {
                 self.checkpoint();
                 self.song_mut().unwrap().questions.remove(qi);
-                self.q_sel = if count > 1 { Some(qi.min(count - 2)) } else { None };
+                self.set_focus(if count > 1 { Some(qi.min(count - 2)) } else { None });
             }
             _ => return false,
         }
@@ -492,7 +631,7 @@ impl Curation {
                         qs.len() - 1
                     }
                 };
-                self.q_sel = Some(i);
+                self.set_focus(Some(i));
             }
         }
     }
@@ -521,6 +660,7 @@ impl Curation {
     fn add_default_questions(&mut self, ctx: &Ctx) {
         let albums = self.albums(ctx);
         let kinds = self.quiz.meta.defaults.questions.clone();
+        let prompts = self.quiz.meta.defaults.prompts.clone();
         let todo = self.quiz.songs().filter(|s| s.questions.is_empty() && !s.skip).count();
         if todo == 0 {
             return self.flash("Every song already has questions");
@@ -532,7 +672,7 @@ impl Curation {
                 && !s.skip
             {
                 let album = albums.get(&s.track_id).map_or("", String::as_str);
-                s.questions = kinds.iter().map(|k| questions::prefilled(k, s, album)).collect();
+                s.questions = kinds.iter().map(|k| questions::prefilled(k, s, album, &prompts)).collect();
             }
         }
         self.flash(format!("Added {} to {todo} songs", kinds.join(" + ")));
@@ -589,14 +729,24 @@ impl Curation {
         ])
         .areas(f.area());
 
+        let g = ctx.glyphs;
         let mut right = vec![music_badge(ctx)];
-        if let Some((m, warn)) = &self.sync_msg {
-            right.push(Span::styled(m.clone(), if *warn { t.warn() } else { t.dim() }));
-        }
+        right.push(match &self.link {
+            Link::Loading | Link::ByName => Span::styled(format!("{} reading playlist", g.sync), t.dim()),
+            Link::Loaded(None) => Span::styled(format!("{} playlist in sync", g.sync), t.dim()),
+            Link::Loaded(Some((p, _))) => {
+                let mut m = format!("{} playlist changed +{} −{}", g.sync, p.added.len(), p.removed.len());
+                if !p.relinks.is_empty() {
+                    m += &format!(" ↻{}", p.relinks.len());
+                }
+                Span::styled(m + "  S review", t.warn())
+            }
+            Link::Missing(e) => Span::styled(format!("{} {e}  R relink", g.error), t.warn()),
+        });
         right.push(match &self.save {
-            Save::Saved => Span::styled("saved ✓", t.dim()),
+            Save::Saved => Span::styled(format!("saved {}", g.check), t.dim()),
             Save::Dirty(_) => Span::styled("saving…", t.dim()),
-            Save::Failed(e) => Span::styled(format!("✗ not saved: {e}"), t.warn()),
+            Save::Failed(e) => Span::styled(format!("{} not saved: {e}", g.error), t.warn()),
         });
         f.render_widget(header_line(ctx, vec![Span::raw(self.quiz.meta.title.clone())], right, head.width), head);
 
@@ -610,8 +760,14 @@ impl Curation {
         self.draw_detail(f, ctx, detail);
         self.draw_now_playing(f, ctx, now);
 
-        let hint = match &self.msg {
-            Some((m, at)) if at.elapsed() < Duration::from_secs(4) => Line::from(Span::styled(format!(" {m}"), t.clip())),
+        let hint = match (&self.input, &self.msg) {
+            (Some(Input::Find(q, _)), _) => Line::from(vec![
+                Span::styled(" find ", t.key()),
+                Span::raw(q.clone()),
+                Span::styled("▏", t.accent()),
+                Span::styled("   Enter keep   Esc back", t.dim()),
+            ]),
+            (_, Some((m, at))) if at.elapsed() < Duration::from_secs(4) => Line::from(Span::styled(format!(" {m}"), t.clip())),
             _ => hint_line(
                 ctx,
                 &[
@@ -624,16 +780,18 @@ impl Curation {
                     ("n", "round"),
                     ("a", "question"),
                     ("Tab", "questions"),
+                    ("/", "find"),
+                    (",", "settings"),
                     ("?", "help"),
                 ],
             ),
         };
         f.render_widget(Paragraph::new(hint).style(t.base()), foot);
 
-        if let Some(input) = &self.input {
+        if let Some(input) = self.input.as_ref().filter(|i| !matches!(i, Input::Find(..))) {
             let (title, text) = match input {
                 Input::NewRound(s) => (" New round above this song ", s),
-                Input::Rename(s) => (" Rename round ", s),
+                Input::Rename(s) | Input::Find(s, _) => (" Rename round ", s),
             };
             let area = centered(f.area(), 50, 5);
             f.render_widget(Clear, area);
@@ -690,9 +848,79 @@ impl Curation {
                 area,
             );
         }
+        if let Some(st) = &self.settings {
+            st.draw(f, ctx);
+        }
+        if self.review {
+            self.draw_review(f, ctx);
+        }
+        if let Some(i) = self.relink {
+            self.draw_relink(f, ctx, i);
+        }
         if self.help {
             draw_help(f, ctx);
         }
+    }
+
+    fn draw_review(&self, f: &mut Frame, ctx: &Ctx) {
+        let t = ctx.theme;
+        let Link::Loaded(Some((plan, _))) = &self.link else { return };
+        let dest = match self.quiz.entries.iter().rev().find_map(|e| if let Entry::Heading(h) = e { Some(h) } else { None }) {
+            Some(h) => format!("→ end of {h}"),
+            None => "→ end".into(),
+        };
+        let row = |sign: &str, style, title: &str, artist: &str, note: String| {
+            Line::from(vec![
+                Span::styled(format!(" {sign} "), style),
+                Span::raw(format!("{:<34}", truncate(title, 34))),
+                Span::styled(format!("{:<20}", truncate(artist, 20)), t.dim()),
+                Span::styled(note, t.dim()),
+            ])
+        };
+        let mut lines = Vec::new();
+        for tr in &plan.added {
+            lines.push(row("+", t.clip(), &tr.title, &tr.artist, dest.clone()));
+        }
+        for s in &plan.removed {
+            let note = match s.questions.len() {
+                0 => "→ not in playlist".to_string(),
+                n => format!("{n} question{} kept", if n == 1 { "" } else { "s" }),
+            };
+            lines.push(row("−", t.warn(), &s.title, &s.artist, note));
+        }
+        for (_, tr) in &plan.relinks {
+            lines.push(row("↻", t.accent(), &tr.title, &tr.artist, "re-link (new ID)".into()));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![Span::styled(" Enter", t.key()), Span::raw(" accept   "), Span::styled("Esc", t.key()), Span::raw(" later")]));
+        let area = centered(f.area(), 80, lines.len() as u16 + 2);
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).block(t.frame(" Playlist changed since last time ", true)), area);
+    }
+
+    fn draw_relink(&self, f: &mut Frame, ctx: &Ctx, sel: usize) {
+        let t = ctx.theme;
+        let mut lines = vec![Line::styled(format!(" Which playlist is \"{}\" now?", self.quiz.meta.source.playlist), t.dim()), Line::raw("")];
+        match ctx.lib.playlists() {
+            None => lines.push(Line::styled(" Loading playlists…", t.dim())),
+            Some(Err(e)) => lines.push(Line::styled(format!(" {e}"), t.warn())),
+            Some(Ok(all)) => {
+                let first = sel.saturating_sub(12);
+                for (i, p) in all.iter().enumerate().skip(first).take(14) {
+                    let style = if i == sel { t.selected() } else { t.base() };
+                    lines.push(Line::from(vec![
+                        Span::styled(if i == sel { format!(" {} ", ctx.glyphs.cursor) } else { "   ".into() }, t.accent()),
+                        Span::styled(format!("{:<44}", truncate(&p.path(), 44)), style),
+                        Span::styled(format!("{:>4} songs", p.count), t.dim()),
+                    ]));
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![Span::styled(" Enter", t.key()), Span::raw(" link   "), Span::styled("Esc", t.key()), Span::raw(" cancel")]));
+        let area = centered(f.area(), 64, lines.len() as u16 + 2);
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).block(t.frame(" Relink playlist ", true)), area);
     }
 
     fn draw_list(&mut self, f: &mut Frame, ctx: &Ctx, area: Rect) {
@@ -712,7 +940,7 @@ impl Curation {
                 Entry::Song(s) => {
                     let playing = ctx.player.is_active() && v.track_id.as_deref() == Some(&s.track_id);
                     let num = numbers[i].map_or("   ".into(), |n| format!("{n:>3}"));
-                    let q = if s.questions.is_empty() { Span::styled(" · ", t.dim()) } else { Span::raw(format!("✓{:<2}", s.questions.len())) };
+                    let q = if s.questions.is_empty() { Span::styled(" · ", t.dim()) } else { Span::raw(format!("{}{:<2}", ctx.glyphs.check, s.questions.len())) };
                     let clip = match s.clip_start {
                         Some(c) => Span::styled(format!("{:>5}", mmss(c as f64)), t.clip()),
                         None => Span::styled(" ────", t.faint()),
@@ -734,7 +962,7 @@ impl Curation {
                         Span::styled(format!("{:<tw$}", truncate(&s.title, tw)), title_style),
                         eq,
                         tag,
-                        if problem && !s.skip { Span::styled("! ", t.warn()) } else { Span::raw("  ") },
+                        if problem && !s.skip { Span::styled(" !", t.warn()) } else { Span::raw("  ") },
                         q,
                         Span::raw(" "),
                         clip,
@@ -747,17 +975,17 @@ impl Curation {
             items.push(ListItem::new(Line::styled(format!("{label}{}", "─".repeat(w.saturating_sub(label.chars().count()))), t.dim())));
             for s in &self.quiz.removed {
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled("  ✗  ", t.dim()),
+                    Span::styled(format!("  {}  ", ctx.glyphs.removed), t.dim()),
                     Span::styled(truncate(&s.title, w.saturating_sub(10)), t.dim()),
-                    Span::styled(if s.questions.is_empty() { String::new() } else { format!("  ✓{}", s.questions.len()) }, t.dim()),
+                    Span::styled(if s.questions.is_empty() { String::new() } else { format!("  {}{}", ctx.glyphs.check, s.questions.len()) }, t.dim()),
                 ])));
             }
         }
         let row = if self.sel < self.quiz.entries.len() { self.sel } else { self.sel + 1 };
         self.list.select(Some(row));
         let count = self.quiz.songs().filter(|s| !s.skip).count();
-        let block = t.frame(Line::from(vec![Span::raw(" Songs "), Span::styled(format!("{count} "), t.dim())]), self.q_sel.is_none());
-        f.render_stateful_widget(List::new(items).block(block).highlight_style(t.selected()).highlight_symbol("▶"), area, &mut self.list);
+        let block = t.frame_fading(Line::from(vec![Span::raw(" Songs "), Span::styled(format!("{count} "), t.dim())]), self.q_sel.is_none(), self.focus_at);
+        f.render_stateful_widget(List::new(items).block(block).highlight_style(t.selected()).highlight_symbol(ctx.glyphs.cursor), area, &mut self.list);
     }
 
     fn overruns(&self, s: &Song) -> bool {
@@ -790,7 +1018,8 @@ impl Curation {
         }
         meta.push(mmss(s.duration as f64));
 
-        let mut lines = vec![Line::styled(meta.join(" · "), t.dim()), Line::raw("")];
+        let inner_w = area.width.saturating_sub(4) as usize;
+        let mut lines = vec![Line::styled(truncate(&meta.join(" · "), inner_w), t.dim()), Line::raw("")];
         let len = self.clip_len(s);
         lines.push(match s.clip_start {
             Some(c) => Line::from(vec![
@@ -805,7 +1034,6 @@ impl Curation {
                 Span::styled("   p play, m mark", t.dim()),
             ]),
         });
-        let inner_w = area.width.saturating_sub(4) as usize;
         let (bar, marker) = self.timeline(ctx, s, inner_w);
         lines.push(bar);
         lines.push(marker);
@@ -823,7 +1051,7 @@ impl Curation {
             let pw = inner_w.saturating_sub(label.len() + 12) / 2;
             let mut prompt = q.prompt.lines();
             let row = Line::from(vec![
-                Span::styled(if selected { "▶" } else { " " }, t.accent()),
+                Span::styled(if selected { ctx.glyphs.cursor } else { " " }, t.accent()),
                 Span::styled(format!("{label:<4}"), t.dim()),
                 Span::raw(format!("{:<pw$} ", truncate(prompt.next().unwrap_or(""), pw))),
                 Span::styled(format!("{:<pw$}", truncate(&q.answer, pw)), t.clip()),
@@ -838,7 +1066,7 @@ impl Curation {
             lines.push(Line::raw(""));
             lines.push(Line::styled(" Enter edit  a add  Del remove  Alt-↑↓ reorder  Tab back", t.dim()));
         }
-        f.render_widget(Paragraph::new(lines).block(t.frame(title, self.q_sel.is_some())), area);
+        f.render_widget(Paragraph::new(lines).block(t.frame_fading(title, self.q_sel.is_some(), self.focus_at)), area);
     }
 
     /// `0:00 ──────[████▶░░░░]────── 3:00` plus a `▲ 1:27` line under the playhead.
@@ -856,7 +1084,7 @@ impl Curation {
         for i in 0..n {
             let in_clip = (cs..=ce.min(n - 1)).contains(&i);
             let (ch, style) = if Some(i) == head {
-                ("▶", t.accent())
+                (ctx.glyphs.cursor, t.accent())
             } else if in_clip && i == cs {
                 ("[", t.clip())
             } else if in_clip && i == ce.min(n - 1) {
@@ -883,14 +1111,14 @@ impl Curation {
         let mut spans = match (&v.phase, &v.track_id) {
             (Phase::Starting, Some(id)) => vec![Span::styled(format!(" … {}", title(id)), t.accent()), Span::styled("  starting", t.dim())],
             (Phase::Playing, Some(id)) => {
-                let mut s = vec![Span::styled(format!(" ▶ {}  ", title(id)), t.accent()), Span::raw(mmss(v.position))];
+                let mut s = vec![Span::styled(format!(" {} {}  ", ctx.glyphs.playing, title(id)), t.accent()), Span::raw(mmss(v.position))];
                 if let Some((start, len)) = v.clip {
                     s.push(Span::styled(format!(" / clip {} of {}", mmss(v.position - start), mmss(len)), t.clip()));
                 }
                 s
             }
-            (Phase::Error(e), _) => vec![Span::styled(format!(" ✗ {e}"), t.warn())],
-            _ => vec![Span::styled(" ■ stopped", t.faint())],
+            (Phase::Error(e), _) => vec![Span::styled(format!(" {} {e}", ctx.glyphs.error), t.warn())],
+            _ => vec![Span::styled(format!(" {} stopped", ctx.glyphs.stopped), t.faint())],
         };
         let right = format!("auto-preview {} ", if self.auto_preview { "on" } else { "off" });
         let used: usize = spans.iter().map(|s| s.width()).sum();
@@ -914,26 +1142,15 @@ fn entry_name(e: &Entry) -> String {
 }
 
 fn draw_help(f: &mut Frame, ctx: &Ctx) {
-    let t = ctx.theme;
     let groups: [(&str, &[(&str, &str)]); 6] = [
-        ("Move", &[("↑↓ j k", "select"), ("g G", "top / bottom"), ("q", "save and quit")]),
+        ("Move", &[("↑↓ j k", "select"), ("g G", "top / bottom"), ("/", "find song"), ("q", "save, back to home")]),
         ("Order", &[("J K", "move song down / up"), ("x  p", "cut, then paste below"), ("o", "order menu for this round"), ("s", "skip song"), ("u  Ctrl-R", "undo / redo")]),
         ("Play", &[("space", "play clip / stop"), ("p", "play from the start"), ("m", "mark clip start here"), ("[ ]  { }", "nudge start 1 s / 5 s"), ("- +", "clip length ±5 s"), ("← →", "seek ±5 s"), ("P", "auto-preview"), ("Esc", "stop")]),
         ("Rounds", &[("n", "new round above song"), ("r", "rename heading"), ("d", "remove heading")]),
         ("Questions", &[("Tab Enter", "questions pane"), ("a", "add question"), ("Enter", "edit question"), ("Del", "remove question"), ("Alt-↑↓", "reorder questions"), ("A", "artist + title to all")]),
-        ("Other", &[("X", "remove song from the playlist"), ("D", "delete removed song here")]),
+        ("Other", &[("X", "remove song from the playlist"), ("D", "delete removed song here"), ("S", "review playlist changes"), ("R", "relink to another playlist"), (",", "quiz settings")]),
     ];
-    let mut lines = Vec::new();
-    for (g, keys) in groups {
-        lines.push(Line::styled(g, t.accent()));
-        for (k, what) in keys {
-            lines.push(Line::from(vec![Span::styled(format!("  {k:<11}"), t.key()), Span::raw(what.to_string())]));
-        }
-    }
-    lines.push(Line::styled("any key closes", t.dim()));
-    let area = centered(f.area(), 52, lines.len() as u16 + 2);
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(t.frame(" Keys ", true)), area);
+    crate::app::draw_keys(f, ctx, &groups);
 }
 
 /// `5` for a song's only question, `5a`, `5b` … when it has several.

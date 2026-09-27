@@ -1,14 +1,17 @@
 //! `mq`: plan a music quiz from a Music.app playlist.
 //!
-//!   mq               pick a playlist and start a new quiz
+//!   mq               home: recent quizzes, or a new one from a playlist
 //!   mq <file>        open a quiz (also `mq edit <file>`)
 
 mod app;
+mod config;
 mod curation;
+mod home;
 mod model;
 mod music;
 mod picker;
 mod questions;
+mod settings;
 mod theme;
 mod worker;
 

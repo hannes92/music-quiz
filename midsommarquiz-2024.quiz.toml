@@ -4,7 +4,7 @@ title = "Midsommarquiz 2024"
 [source]
 playlist = "Midsommarquiz 2024"
 playlist_id = "DB0FF025DA54AA94"
-synced_at = 2026-09-27T20:01:35Z
+synced_at = 2026-09-27T20:16:20Z
 
 [defaults]
 clip_length = 30
@@ -151,25 +151,6 @@ answer = 'Main Title (From the Motion Picture "Scarface")'
 points = 1.0
 
 [[round.song]]
-track_id = "C3A9BCD2F94F0B12"
-title = 'Theme (From "The Untouchables", 1987)'
-artist = "Ennio Morricone"
-year = 2003
-duration = 123
-
-[[round.song.question]]
-kind = "artist"
-prompt = "Vem är artisten?"
-answer = "Ennio Morricone"
-points = 1.0
-
-[[round.song.question]]
-kind = "title"
-prompt = "Vad heter låten?"
-answer = 'Theme (From "The Untouchables", 1987)'
-points = 1.0
-
-[[round.song]]
 track_id = "8ADC59E40A7BB286"
 title = "American Beauty"
 artist = "Thomas Newman"
@@ -272,16 +253,10 @@ year = 2013
 duration = 80
 
 [[round.song.question]]
-kind = "artist"
-prompt = "Vem är artisten?"
-answer = "Instrumental All Stars"
-points = 1.0
-
-[[round.song.question]]
-kind = "title"
-prompt = "Vad heter låten?"
-answer = "Law & Order Theme"
-points = 1.0
+kind = "custom"
+prompt = "Vad heter Tv-Serien?"
+answer = "Law & Order"
+points = 2.0
 
 [[round.song]]
 track_id = "0AA652F91579E673"
@@ -338,4 +313,23 @@ points = 1.0
 kind = "title"
 prompt = "Vad heter låten?"
 answer = "Won't Get Fooled Again"
+points = 1.0
+
+[[removed]]
+track_id = "C3A9BCD2F94F0B12"
+title = 'Theme (From "The Untouchables", 1987)'
+artist = "Ennio Morricone"
+year = 2003
+duration = 123
+
+[[removed.question]]
+kind = "artist"
+prompt = "Vem är artisten?"
+answer = "Ennio Morricone"
+points = 1.0
+
+[[removed.question]]
+kind = "title"
+prompt = "Vad heter låten?"
+answer = 'Theme (From "The Untouchables", 1987)'
 points = 1.0
