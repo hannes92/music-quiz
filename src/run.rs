@@ -101,8 +101,18 @@ struct Setup {
     play_check: Option<PlayCheck>,
 }
 
+/// Finding the quiz's playlist and songs in this Mac's library.
+enum Link {
+    /// Reading the playlist; `by_name` when its ID didn't resolve.
+    Tracks { by_name: bool },
+    /// The ID didn't resolve (with this error): looking for the name.
+    Playlists(String),
+    Done,
+}
+
 pub struct Run {
     quiz: Quiz,
+    link: Link,
     path: PathBuf,
     slides: Vec<Slide>,
     idx: usize,
@@ -132,6 +142,7 @@ impl Run {
             .map(|s| s.slide);
         Run {
             quiz,
+            link: Link::Tracks { by_name: false },
             path,
             slides,
             idx: 0,
@@ -201,8 +212,13 @@ impl Run {
 
     fn play_current(&mut self, ctx: &Ctx) {
         let Slide::Song { cycle, entry, .. } = self.slides[self.idx] else { return };
+        if !matches!(self.link, Link::Done) {
+            // The track IDs may still change; start as soon as they are known.
+            self.play_at = Some(Instant::now());
+            return;
+        }
         let s = self.song(entry).clone();
-        let d = &self.quiz.meta.defaults;
+        let d =&self.quiz.meta.defaults;
         let length = match cycle {
             Cycle::Rerun => d.rerun_length,
             _ => s.clip_length.unwrap_or(d.clip_length),
@@ -219,14 +235,49 @@ impl Run {
         self.next_at = None;
     }
 
-    pub fn tick(&mut self, ctx: &Ctx) {
-        if let Some(setup) = &mut self.setup {
-            if !setup.loaded
-                && let Some(r) = ctx.lib.tracks(&self.quiz.meta.source.playlist_id)
-            {
-                setup.loaded = true;
-                setup.items = check::check(&self.quiz, &r, false);
+    /// The IDs in the file may be from another Mac: find the playlist by name
+    /// and the songs by title, artist and length. Nothing is saved.
+    fn tick_link(&mut self, ctx: &Ctx) {
+        let r = match &self.link {
+            Link::Done => return,
+            Link::Tracks { by_name } => {
+                let Some(r) = ctx.lib.tracks(&self.quiz.meta.source.playlist_id) else { return };
+                match r {
+                    Err(e) if !by_name => {
+                        ctx.lib.load_playlists();
+                        self.link = Link::Playlists(e);
+                        return;
+                    }
+                    r => r,
+                }
             }
+            Link::Playlists(e) => {
+                let Some(all) = ctx.lib.playlists() else { return };
+                let name = &self.quiz.meta.source.playlist;
+                match all.ok().and_then(|all| all.into_iter().find(|p| p.name == *name)) {
+                    Some(p) => {
+                        ctx.lib.load_tracks(&p.id, true);
+                        self.quiz.use_playlist(&p.id);
+                        self.link = Link::Tracks { by_name: true };
+                        return;
+                    }
+                    None => Err(e.clone()),
+                }
+            }
+        };
+        self.link = Link::Done;
+        if let Ok(tracks) = &r {
+            self.quiz.use_library(tracks);
+        }
+        if let Some(setup) = &mut self.setup {
+            setup.loaded = true;
+            setup.items = check::check(&self.quiz, &r, false);
+        }
+    }
+
+    pub fn tick(&mut self, ctx: &Ctx) {
+        self.tick_link(ctx);
+        if self.setup.is_some() {
             return;
         }
         if self.play_at.is_some_and(|t| Instant::now() >= t) {
@@ -308,7 +359,7 @@ impl Run {
         let checking = setup.play_check.as_ref().is_some_and(|p| p.lock().unwrap().2.is_none());
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc if !checking => return Transition::Home,
-            KeyCode::Char('c') if !checking => {
+            KeyCode::Char('c') if !checking && setup.loaded => {
                 let progress = Arc::new(Mutex::new((0, 0, None)));
                 let p = progress.clone();
                 let quiz = self.quiz.clone();
@@ -760,6 +811,7 @@ mod tests {
         let mut run = Run {
             slides: slides(&loaded),
             quiz: loaded,
+            link: Link::Done,
             path: path.clone(),
             idx: 0,
             setup: None,

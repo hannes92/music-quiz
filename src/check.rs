@@ -55,6 +55,9 @@ pub fn check(quiz: &Quiz, tracks: &Result<Vec<Track>, String>, titles: bool) -> 
     } else {
         out.push(item(Level::Fail, format!("Not in the playlist: {} (open the quiz to review)", list(missing))));
     }
+    if quiz.matched_by_name() > 0 {
+        out.push(item(Level::Ok, format!("{} songs found by title, artist and length (other IDs in this library)", quiz.matched_by_name())));
+    }
     let no_clip: Vec<String> = songs.iter().filter(|(_, s)| s.clip_start.is_none()).map(|(n, s)| name(*n, s)).collect();
     if !no_clip.is_empty() {
         out.push(item(Level::Warn, format!("No clip start, will play from 0:00: {}", list(no_clip))));
@@ -121,14 +124,24 @@ pub fn play_check(quiz: &Quiz, mut progress: impl FnMut(usize, usize)) -> Vec<It
 
 /// `mq check <file> [--play]`
 pub fn cli(path: &std::path::Path, play: bool) -> anyhow::Result<bool> {
-    let quiz = Quiz::load(path)?;
+    let mut quiz = Quiz::load(path)?;
     let status = music::status();
     match &status {
         Ok(s) if s.state == "not running" => println!("  ○ Music.app is not running (it starts on the first song)"),
         Ok(_) => println!("  ✓ Music.app can be controlled"),
         Err(e) => println!("  ✗ Music.app: {e}"),
     }
-    let tracks = music::tracks(&quiz.meta.source.playlist_id).map_err(|e| e.to_string());
+    let mut tracks = music::tracks(&quiz.meta.source.playlist_id).map_err(|e| e.to_string());
+    if tracks.is_err()
+        && let Ok(all) = music::playlists()
+        && let Some(p) = all.iter().find(|p| p.name == quiz.meta.source.playlist)
+    {
+        quiz.use_playlist(&p.id);
+        tracks = music::tracks(&p.id).map_err(|e| e.to_string());
+    }
+    if let Ok(t) = &tracks {
+        quiz.use_library(t);
+    }
     let mut items = check(&quiz, &tracks, true);
     if play && tracks.is_ok() {
         items.extend(play_check(&quiz, |done, total| eprint!("\r  playing {done}/{total} muted…")));

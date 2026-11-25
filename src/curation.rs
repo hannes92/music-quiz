@@ -179,6 +179,8 @@ impl Curation {
                 let Some(r) = ctx.lib.tracks(&self.playlist_id()) else { return };
                 self.link = match r {
                     Ok(tracks) => {
+                        let changed = self.quiz.use_library(&tracks);
+                        self.rename_ids(&changed);
                         let plan = self.quiz.plan_sync(&tracks);
                         Link::Loaded((!plan.is_empty()).then_some((plan, tracks)))
                     }
@@ -194,13 +196,30 @@ impl Curation {
                 match r.map(|all| all.into_iter().find(|p| p.name == name)) {
                     Ok(Some(p)) => {
                         self.flash(format!("Playlist found by name: {}", p.path()));
-                        self.link_playlist(ctx, &p);
+                        self.quiz.use_playlist(&p.id);
+                        ctx.lib.load_tracks(&p.id, true);
+                        self.link = Link::Loading;
                     }
                     Ok(None) => self.link = Link::Missing(format!("playlist \"{name}\" not found")),
                     Err(e) => self.link = Link::Missing(e),
                 }
             }
             Link::Loaded(_) | Link::Missing(_) => {}
+        }
+    }
+
+    /// Bring undo and redo along when `use_library` changed track IDs.
+    fn rename_ids(&mut self, changed: &HashMap<String, String>) {
+        for (entries, removed) in self.undo.iter_mut().chain(&mut self.redo) {
+            let songs = entries.iter_mut().filter_map(|e| match e {
+                Entry::Song(s) => Some(s),
+                Entry::Heading(_) => None,
+            });
+            for s in songs.chain(removed) {
+                if let Some(id) = changed.get(&s.track_id) {
+                    s.track_id = id.clone();
+                }
+            }
         }
     }
 
@@ -217,13 +236,12 @@ impl Curation {
     fn apply_review(&mut self) {
         let Link::Loaded(Some((plan, tracks))) = std::mem::replace(&mut self.link, Link::Loaded(None)) else { return };
         self.checkpoint();
-        let added = self.quiz.apply_sync(&plan, &tracks);
+        let (added, _) = self.quiz.sync(&tracks);
         self.new_ids.extend(added);
         self.flash(format!(
-            "Playlist synced: {} added, {} moved to \"not in playlist\", {} re-linked",
+            "Playlist synced: {} added, {} moved to \"not in playlist\"",
             plan.added.len(),
-            plan.removed.len(),
-            plan.relinks.len()
+            plan.removed.len()
         ));
     }
 
@@ -744,11 +762,7 @@ impl Curation {
             Link::Loading | Link::ByName => Span::styled(format!("{} reading playlist", g.sync), t.dim()),
             Link::Loaded(None) => Span::styled(format!("{} playlist in sync", g.sync), t.dim()),
             Link::Loaded(Some((p, _))) => {
-                let mut m = format!("{} playlist changed +{} −{}", g.sync, p.added.len(), p.removed.len());
-                if !p.relinks.is_empty() {
-                    m += &format!(" ↻{}", p.relinks.len());
-                }
-                Span::styled(m + "  S review", t.warn())
+                Span::styled(format!("{} playlist changed +{} −{}  S review", g.sync, p.added.len(), p.removed.len()), t.warn())
             }
             Link::Missing(e) => Span::styled(format!("{} {e}  R relink", g.error), t.warn()),
         });
@@ -897,9 +911,6 @@ impl Curation {
                 n => format!("{n} question{} kept", if n == 1 { "" } else { "s" }),
             };
             lines.push(row("−", t.warn(), &s.title, &s.artist, note));
-        }
-        for (_, tr) in &plan.relinks {
-            lines.push(row("↻", t.accent(), &tr.title, &tr.artist, "re-link (new ID)".into()));
         }
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![Span::styled(" Enter", t.key()), Span::raw(" accept   "), Span::styled("Esc", t.key()), Span::raw(" later")]));

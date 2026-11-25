@@ -397,7 +397,7 @@ mod tests {
         let mut quiz = Quiz::new("Review test", &pl, &tracks);
         quiz.entries.remove(0); // comes back as added
         if let Entry::Song(s) = &mut quiz.entries[0] {
-            s.track_id = "DEADBEEFDEADBEEF".into(); // same song, stale ID: re-linked
+            s.track_id = "DEADBEEFDEADBEEF".into(); // same song, ID from another Mac: found, kept in the file
         }
         let mut ghost = Song::from_track(&tracks[0]);
         ghost.track_id = "0000000000000000".into();
@@ -438,11 +438,11 @@ mod tests {
         cur.flush();
         let back = Quiz::load(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(back.meta.source.playlist_id, pl.id);
+        assert_eq!(back.meta.source.playlist_id, "FFFFFFFFFFFFFFFF");
         assert_eq!(back.meta.subtitle.as_deref(), Some("Film/TV-serier"));
         let ids: Vec<&str> = back.songs().map(|s| s.track_id.as_str()).collect();
         assert_eq!(ids.len(), tracks.len());
-        assert!(ids.contains(&tracks[1].id.as_str()));
+        assert!(ids.contains(&"DEADBEEFDEADBEEF"));
         assert_eq!(ids.last(), Some(&tracks[0].id.as_str()));
         assert_eq!(back.removed.len(), 1);
     }

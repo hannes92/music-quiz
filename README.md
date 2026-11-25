@@ -22,7 +22,8 @@ a crash or quit it offers to resume. Keep Music.app on another display.
 
 The quiz is a normal Music.app playlist. `mq` keeps what Music.app doesn't
 know about in `<name>.quiz.toml`: the running order, rounds, clips and
-questions. Press `?` on any screen for its keys.
+questions. The file works on several Macs: when Music.app has other IDs there,
+the playlist is found by name and the songs by title, artist and length. Press `?` on any screen for its keys.
 
 The first time, macOS asks whether your terminal may control Music. That is
 the only permission needed; Music.app is never brought to the front.
