@@ -1,0 +1,236 @@
+format = 1
+title = "Quiz Julfest"
+
+[source]
+playlist = "Quiz Julfest"
+playlist_id = "32BC8488C6F68D48"
+synced_at = 2026-11-24T17:08:48Z
+
+[defaults]
+clip_length = 30
+rerun_length = 10
+questions = [
+    "artist",
+    "title",
+]
+fade_out = true
+text_size = 2
+
+[[round]]
+
+[[round.song]]
+track_id = "2760F11B147548F3"
+title = "Guld och gröna skogar"
+artist = "Hasse Andersson"
+year = 2015
+duration = 184
+clip_start = 9
+clip_length = 10
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "Hasse Andersson – Guld och gröna skogar"
+points = 2.0
+
+[[round.song]]
+track_id = "998215A9D3F6EF0E"
+title = "Message In A Bottle (Remastered 2003)"
+artist = "The Police"
+year = 1979
+duration = 291
+clip_length = 45
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "The Police – Message in a Bottle"
+points = 2.0
+
+[[round.song]]
+track_id = "E435C2F4BE107D17"
+title = "Song 2 (2012 Remaster)"
+artist = "Blur"
+year = 1997
+duration = 121
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "Blur – Song 2"
+points = 2.0
+
+[[round.song]]
+track_id = "69222F255091F50D"
+title = "One Night In Bangkok (Radio Edit / From “Chess” / Remastered 2016)"
+artist = "Murray Head"
+year = 1984
+duration = 194
+clip_length = 60
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken musikal skrevs den här låten till?"
+answer = "Chess"
+points = 1.0
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken brädspelsklassiker handlar musikalen om?"
+answer = "Schack"
+points = 1.0
+
+[[round.song]]
+track_id = "63179A4CD683DC4D"
+title = "Voodoo Child (Slight Return)"
+artist = "The Jimi Hendrix Experience"
+year = 1968
+duration = 313
+clip_length = 60
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "Jimi Hendrix – Voodoo Child (Slight Return)"
+points = 2.0
+
+[[round.song]]
+track_id = "452ACDCA3F17D4E3"
+title = "Tin Man"
+artist = "America"
+year = 2011
+duration = 208
+clip_length = 60
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vad heter bandet?"
+answer = "America"
+points = 1.0
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken klassisk film från 1939 hämtar titeln sin figur ifrån?"
+answer = "Trollkarlen från Oz"
+points = 1.0
+
+[[round.song]]
+track_id = "A8EEE6E7CEB7177A"
+title = "It's All Coming Back to Me Now"
+artist = "Céline Dion"
+year = 1996
+duration = 457
+clip_length = 10
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "Celine Dion – It's All Coming Back to Me Now"
+points = 2.0
+
+[[round.song]]
+track_id = "B2512883CFB81CAF"
+title = "Tonight's the Night (Gonna Be Alright)"
+artist = "Rod Stewart"
+year = 1976
+duration = 213
+clip_length = 40
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "Rod Stewart – Tonight's the Night (Gonna Be Alright)"
+points = 2.0
+
+[[round.song]]
+track_id = "81AFBC4405A57893"
+title = "Chariots of Fire"
+artist = "Vangelis"
+year = 2012
+duration = 209
+clip_length = 90
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vilken film skrevs musiken till?"
+answer = "Vangelis – Triumfens ögonblick (Chariots of Fire)"
+points = 2.0
+
+[[round.song]]
+track_id = "498D87E766D95188"
+title = "Celebration"
+artist = "Kool & The Gang"
+year = 1988
+duration = 298
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "Kool & The Gang – Celebration"
+points = 2.0
+
+[[round.song.question]]
+kind = "custom"
+prompt = """
+Vilken är filmen och vilket år kom den ut?
+Bandet ligger också bakom låten Summer Madness,
+som hörs i en berömd boxningsfilm."""
+answer = "Rocky (1976)"
+points = 2.0
+
+[[round.song]]
+track_id = "68430174D22A5CEA"
+title = "Golden Years (Single Version)"
+artist = "David Bowie"
+year = 1975
+duration = 210
+clip_start = 26
+clip_length = 20
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "David Bowie – Golden Years"
+points = 2.0
+
+[[round.song]]
+track_id = "2DD305F3C981A9E1"
+title = "32"
+artist = "Mr. Mister"
+year = 1984
+duration = 278
+clip_length = 50
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = 'Mr. Mister – "32"'
+points = 2.0
+
+[[round.song]]
+track_id = "40F4FA0A0AC98C38"
+title = 'Love Me Like You Do (From "Fifty Shades of Grey")'
+artist = "Ellie Goulding"
+year = 2015
+duration = 253
+clip_length = 40
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och till vilken film skrevs låten?"
+answer = "Ellie Goulding – Fifty Shades of Grey"
+points = 2.0
+
+[[round.song]]
+track_id = "5E5B4FDF5C32F5F7"
+title = "In Da Club"
+artist = 'Curtis "50 Cent" Jackson'
+year = 2003
+duration = 193
+clip_length = 45
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilken är artisten och vad heter låten?"
+answer = "50 Cent – In Da Club"
+points = 2.0
