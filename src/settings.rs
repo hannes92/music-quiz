@@ -1,7 +1,7 @@
 //! Quiz settings dialog (`,`): title, sheet texts, clip defaults and prompts.
 
 use crate::app::{Ctx, centered};
-use crate::model::QuizFile;
+use crate::model::{MAX_TEXT_SIZE, QuizFile};
 use crate::questions::{KINDS, default_prompt};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -11,6 +11,7 @@ use ratatui::widgets::{Clear, Paragraph};
 enum Field {
     Text { label: &'static str, value: String, placeholder: String },
     Number { label: &'static str, value: u32, step: u32, min: u32 },
+    Size { label: &'static str, value: u32 },
     Kinds { label: &'static str, on: Vec<bool> },
     Toggle { label: &'static str, on: bool },
 }
@@ -29,7 +30,7 @@ pub struct Settings {
 /// The four kinds that can be prefilled (Custom has no default).
 const PREFILL: usize = 4;
 /// Index of the first prompt field.
-const FIRST_PROMPT: usize = 7;
+const FIRST_PROMPT: usize = 8;
 
 impl Settings {
     pub fn new(meta: &QuizFile) -> Self {
@@ -46,6 +47,7 @@ impl Settings {
             Field::Number { label: "Re-run length", value: d.rerun_length, step: 1, min: 3 },
             Field::Kinds { label: "Default questions", on: KINDS[..PREFILL].iter().map(|(k, _)| d.questions.iter().any(|q| q == k)).collect() },
             Field::Toggle { label: "Fade out clips", on: d.fade_out },
+            Field::Size { label: "Text size (run)", value: d.text_size.clamp(1, MAX_TEXT_SIZE) },
         ];
         for (kind, name) in &KINDS[..PREFILL] {
             fields.push(Field::Text {
@@ -81,6 +83,9 @@ impl Settings {
         if let Field::Toggle { on, .. } = &self.fields[6] {
             meta.defaults.fade_out = *on;
         }
+        if let Field::Size { value, .. } = &self.fields[7] {
+            meta.defaults.text_size = *value;
+        }
         if let Field::Kinds { on, .. } = &self.fields[5] {
             meta.defaults.questions = KINDS[..PREFILL].iter().zip(on).filter(|(_, on)| **on).map(|((k, _), _)| k.to_string()).collect();
         }
@@ -107,6 +112,8 @@ impl Settings {
             (KeyCode::Char(c), Field::Text { value, .. }) if !ctrl => value.push(c),
             (KeyCode::Left | KeyCode::Char('-'), Field::Number { value, step, min, .. }) => *value = value.saturating_sub(*step).max(*min),
             (KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('='), Field::Number { value, step, .. }) => *value += *step,
+            (KeyCode::Left | KeyCode::Char('-'), Field::Size { value, .. }) => *value = (*value - 1).max(1),
+            (KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('='), Field::Size { value, .. }) => *value = (*value + 1).min(MAX_TEXT_SIZE),
             (KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right, Field::Toggle { on, .. }) => *on = !*on,
             (KeyCode::Char(c @ '1'..='4'), Field::Kinds { on, .. }) => {
                 let i = c as usize - '1' as usize;
@@ -141,6 +148,9 @@ impl Settings {
                 Field::Number { label, value, .. } => {
                     (label, vec![Span::styled("◀ ", t.dim()), Span::styled(format!("{value} s"), t.clip()), Span::styled(" ▶", t.dim())])
                 }
+                Field::Size { label, value } => {
+                    (label, vec![Span::styled("◀ ", t.dim()), Span::styled(format!("{value} of {MAX_TEXT_SIZE}"), t.clip()), Span::styled(" ▶", t.dim())])
+                }
                 Field::Toggle { label, on } => {
                     (label, vec![Span::styled(if *on { "[x] on" } else { "[ ] off" }, if *on { t.clip() } else { t.dim() })])
                 }
@@ -171,7 +181,7 @@ impl Settings {
         }
         lines.push(Line::raw(""));
         let hint = match self.fields[self.sel] {
-            Field::Number { .. } => "← → change   ",
+            Field::Number { .. } | Field::Size { .. } => "← → change   ",
             Field::Kinds { .. } => "1-4 toggle   ",
             Field::Toggle { .. } => "space toggle   ",
             Field::Text { .. } => "type to edit   ",

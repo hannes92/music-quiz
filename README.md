@@ -17,7 +17,7 @@ three parts: listen (each song and its questions), a quick re-run (a short
 snippet of each song, moving on by itself) and the reveal (answers shown).
 Titled rounds get a card in each part. Keys: space play/pause, → ← next and
 previous, r replay, g jump to a song, R jump to the reveal, b blank screen,
-h hide the key line, q end. The position is saved next to the quiz, so after
++ and - change the text size (0 resets it), h hide the key line, q end. The position is saved next to the quiz, so after
 a crash or quit it offers to resume. Keep Music.app on another display.
 
 The quiz is a normal Music.app playlist. `mq` keeps what Music.app doesn't

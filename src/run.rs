@@ -8,9 +8,9 @@
 
 use crate::app::{Ctx, Transition, centered};
 use crate::check::{self, Item, Level};
-use crate::model::{Entry, Quiz, Song};
+use crate::model::{DEFAULT_TEXT_SIZE, Entry, MAX_TEXT_SIZE, Quiz, Song};
 use crate::questions::fmt_points;
-use crate::theme::mmss;
+use crate::theme::{Theme, mmss};
 use crate::worker::Phase;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -117,6 +117,8 @@ pub struct Run {
     seen_finished: u64,
     /// The clip on the current slide has been started at least once.
     played: bool,
+    /// When the text size was last changed, to show it for a moment.
+    size_note: Option<Instant>,
 }
 
 impl Run {
@@ -141,6 +143,7 @@ impl Run {
             next_at: None,
             seen_finished: ctx.player.view().finished,
             played: false,
+            size_note: None,
         }
     }
 
@@ -150,6 +153,25 @@ impl Run {
             let _ = std::fs::remove_file(p);
         } else if let Ok(t) = toml::to_string(&Saved { slide: self.idx, slides: self.slides.len() }) {
             let _ = std::fs::write(p, t);
+        }
+    }
+
+    fn text_size(&self) -> u32 {
+        self.quiz.meta.defaults.text_size.clamp(1, MAX_TEXT_SIZE)
+    }
+
+    /// Change the size and remember it in the quiz file. The file is read
+    /// again first so nothing else in it is overwritten.
+    fn set_text_size(&mut self, size: u32) {
+        let size = size.clamp(1, MAX_TEXT_SIZE);
+        self.size_note = Some(Instant::now());
+        if size == self.text_size() {
+            return;
+        }
+        self.quiz.meta.defaults.text_size = size;
+        if let Ok(mut q) = Quiz::load(&self.path) {
+            q.meta.defaults.text_size = size;
+            let _ = q.save(&self.path);
         }
     }
 
@@ -271,6 +293,9 @@ impl Run {
                     self.go(i, ctx);
                 }
             }
+            KeyCode::Char('+' | '=') => self.set_text_size(self.text_size() + 1),
+            KeyCode::Char('-') => self.set_text_size(self.text_size() - 1),
+            KeyCode::Char('0') => self.set_text_size(DEFAULT_TEXT_SIZE),
             KeyCode::Char('b') => self.blank = !self.blank,
             KeyCode::Char('h') => self.hints = !self.hints,
             _ => {}
@@ -347,6 +372,8 @@ impl Run {
         f.render_widget(Paragraph::new(Span::styled(self.quiz.meta.title.clone(), t.faint())).alignment(Alignment::Right), top);
 
         let mut blocks = Vec::new();
+        // The size the current song is drawn at, when it has text to size.
+        let mut shown = None;
         let w = body.width;
         match self.slides[self.idx].clone() {
             Slide::Title => {
@@ -376,30 +403,9 @@ impl Run {
                 blocks.push(big(&title, t.accent(), w, true));
             }
             Slide::Song { cycle, entry, number, .. } => {
-                let s = self.song(entry).clone();
-                blocks.push(big(&number.to_string(), t.accent(), w, true));
-                if cycle != Cycle::Rerun {
-                    blocks.push(Blk::Gap(1));
-                    let many = s.questions.len() > 1;
-                    for (i, q) in s.questions.iter().enumerate() {
-                        let label = if many { format!("{}  ", (b'a' + i as u8) as char) } else { String::new() };
-                        let mut prompt = q.prompt.lines();
-                        let first = prompt.next().unwrap_or("");
-                        blocks.push(big(&format!("{label}{first}"), t.base(), w, false));
-                        for hint in prompt {
-                            blocks.push(text(Line::styled(hint.to_string(), t.dim())));
-                        }
-                        if cycle == Cycle::Reveal {
-                            let pts = format!("  ({} p)", fmt_points(q.points));
-                            blocks.push(big(&q.answer, t.clip(), w, false));
-                            blocks.push(text(Line::styled(pts, t.dim())));
-                        }
-                        blocks.push(Blk::Gap(1));
-                    }
-                    if cycle == Cycle::Reveal {
-                        blocks.push(text(Line::styled(format!("{} – {}", s.title, s.artist), t.dim())));
-                    }
-                }
+                let (b, size) = fit_song(self.song(entry), cycle, number, self.text_size(), t, w, body.height);
+                blocks = b;
+                shown = Some(size).filter(|_| cycle != Cycle::Rerun);
             }
             Slide::Done => {
                 blocks.push(big("Tack!", t.accent(), w, true));
@@ -428,8 +434,14 @@ impl Run {
                 bar,
             );
         }
-        if self.hints {
-            let keys = "space play/pause   → ← next/prev   r replay   g jump   R reveal   b blank   h hide keys   q end";
+        if self.size_note.is_some_and(|at| at.elapsed() < Duration::from_secs(3)) {
+            let mut note = format!("Textstorlek {} av {MAX_TEXT_SIZE}", self.text_size());
+            if let Some(n) = shown.filter(|n| *n < self.text_size()) {
+                note.push_str(&format!(" (här får {n} plats)"));
+            }
+            f.render_widget(Paragraph::new(Span::styled(note, t.dim())).alignment(Alignment::Center), hint);
+        } else if self.hints {
+            let keys = "space play/pause   → ← next/prev   r replay   g jump   R reveal   + − text size   b blank   h hide keys   q end";
             f.render_widget(Paragraph::new(Span::styled(keys, t.faint())).alignment(Alignment::Center), hint);
         }
         if let Some(j) = &self.jump {
@@ -511,33 +523,134 @@ enum Blk {
     Gap(u16),
 }
 
+/// The big font lacks typographic dashes and quotes and would leave gaps.
+fn plain_marks(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '–' | '—' | '−' => '-',
+            '’' | '‘' => '\'',
+            '“' | '”' => '"',
+            c => c,
+        })
+        .collect()
+}
+
 /// Large text that fits the width: 8x8 cells per letter when `huge` and it
 /// fits, else 4x4, else plain bold text.
 fn big(s: &str, style: Style, width: u16, huge: bool) -> Blk {
     let n = s.chars().count() as u16;
     if huge && n * 8 <= width {
-        Blk::Big(s.into(), style, PixelSize::Full, 8)
+        Blk::Big(plain_marks(s), style, PixelSize::Full, 8)
     } else if n * 4 <= width {
-        Blk::Big(s.into(), style, PixelSize::Quadrant, 4)
+        Blk::Big(plain_marks(s), style, PixelSize::Quadrant, 4)
     } else {
         Blk::Text(Line::styled(s.to_string(), style.add_modifier(Modifier::BOLD)))
     }
+}
+
+/// Break at spaces into lines of at most `max` letters. `None` if a word is too long.
+fn wrap(s: &str, max: usize) -> Option<Vec<String>> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in s.split(' ') {
+        let n = word.chars().count();
+        if n > max {
+            return None;
+        }
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + n <= max => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    Some(lines)
+}
+
+fn plain(s: &str, style: Style, width: u16) -> Vec<Blk> {
+    let lines = wrap(s, width as usize).unwrap_or_else(|| vec![s.to_string()]);
+    lines.into_iter().map(|l| text(Line::styled(l, style))).collect()
+}
+
+/// `s` at a text size: 1 plain, 2 as large as fits on one line (up to 4x4),
+/// 3 4x4, 4 8x4, 5 8x8, the last three over several lines.
+/// `None` if a word is wider than the screen.
+fn sized(s: &str, style: Style, width: u16, size: u32) -> Option<Vec<Blk>> {
+    let (px, cell_w, cell_h) = match size {
+        2 if s.chars().count() * 4 <= width as usize => (PixelSize::Quadrant, 4, 4),
+        ..=2 => return Some(plain(s, style.add_modifier(Modifier::BOLD), width)),
+        3 => (PixelSize::Quadrant, 4, 4),
+        4 => (PixelSize::HalfHeight, 8, 4),
+        _ => (PixelSize::Full, 8, 8),
+    };
+    let lines = wrap(&plain_marks(s), width as usize / cell_w)?;
+    Some(lines.into_iter().map(|l| Blk::Big(l, style, px, cell_h)).collect())
+}
+
+/// A song slide at one text size; `None` if it is too wide.
+fn song_blocks(s: &Song, cycle: Cycle, number: usize, size: u32, huge: bool, t: &Theme, w: u16) -> Option<Vec<Blk>> {
+    let mut blocks = vec![big(&number.to_string(), t.accent(), w, huge)];
+    if cycle == Cycle::Rerun {
+        return Some(blocks);
+    }
+    blocks.push(Blk::Gap(1));
+    let many = s.questions.len() > 1;
+    for (i, q) in s.questions.iter().enumerate() {
+        let label = if many { format!("{}  ", (b'a' + i as u8) as char) } else { String::new() };
+        let mut prompt = q.prompt.lines();
+        let first = prompt.next().unwrap_or("");
+        blocks.extend(sized(&format!("{label}{first}"), t.base(), w, size)?);
+        for hint in prompt {
+            // Hints follow the larger sizes, one step behind the question.
+            match size {
+                ..=3 => blocks.extend(plain(hint, t.dim(), w)),
+                _ => blocks.extend(sized(hint, t.dim(), w, 3)?),
+            }
+        }
+        if cycle == Cycle::Reveal {
+            blocks.extend(sized(&q.answer, t.clip(), w, size)?);
+            blocks.push(text(Line::styled(format!("  ({} p)", fmt_points(q.points)), t.dim())));
+        }
+        blocks.push(Blk::Gap(1));
+    }
+    if cycle == Cycle::Reveal {
+        blocks.extend(plain(&format!("{} – {}", s.title, s.artist), t.dim(), w));
+    }
+    Some(blocks)
+}
+
+/// The song slide at the largest size up to `size` that fits whole, and that
+/// size. The number shrinks before the text does.
+fn fit_song(s: &Song, cycle: Cycle, number: usize, size: u32, t: &Theme, w: u16, h: u16) -> (Vec<Blk>, u32) {
+    for size in (1..=size).rev() {
+        for huge in [true, false] {
+            if let Some(b) = song_blocks(s, cycle, number, size, huge, t, w)
+                && b.iter().map(height).sum::<u16>() <= h
+            {
+                return (b, size);
+            }
+        }
+    }
+    (song_blocks(s, cycle, number, 1, false, t, w).unwrap_or_default(), 1)
 }
 
 fn text(l: Line<'static>) -> Blk {
     Blk::Text(l)
 }
 
-/// Stack blocks vertically, centered; drops what doesn't fit.
-fn render_blocks(f: &mut Frame, area: Rect, blocks: Vec<Blk>) {
-    let h = |b: &Blk| match b {
+fn height(b: &Blk) -> u16 {
+    match b {
         Blk::Big(_, _, _, h) | Blk::Gap(h) => *h,
         Blk::Text(_) => 1,
-    };
-    let total: u16 = blocks.iter().map(h).sum();
+    }
+}
+
+/// Stack blocks vertically, centered; drops what doesn't fit.
+fn render_blocks(f: &mut Frame, area: Rect, blocks: Vec<Blk>) {
+    let total: u16 = blocks.iter().map(height).sum();
     let mut y = area.y + area.height.saturating_sub(total) / 2;
     for b in blocks {
-        let bh = h(&b);
+        let bh = height(&b);
         if y + bh > area.bottom() {
             break;
         }
@@ -576,6 +689,104 @@ mod tests {
         // Numbers skip the skipped song.
         let nums: Vec<usize> = s.iter().filter_map(|x| if let Slide::Song { cycle: Cycle::Listen, number, .. } = x { Some(*number) } else { None }).collect();
         assert_eq!(nums, vec![1, 2]);
+    }
+
+    fn long_song() -> Song {
+        let q = |prompt: &str, answer: &str| crate::model::Question { kind: "custom".into(), prompt: prompt.into(), answer: answer.into(), points: 2.0 };
+        Song {
+            track_id: "1".into(),
+            title: "Celebration".into(),
+            artist: "Kool & The Gang".into(),
+            year: 1980,
+            duration: 200,
+            clip_start: None,
+            clip_length: None,
+            skip: false,
+            questions: vec![
+                q("Vilken är artisten och vad heter låten?", "Kool & The Gang – Celebration"),
+                q("Vilken är filmen och vilket år kom den ut?\nBandet ligger också bakom låten Summer Madness,\nsom hörs i en berömd boxningsfilm.", "Rocky (1976)"),
+            ],
+        }
+    }
+
+    #[test]
+    fn every_text_size_fits_the_screen_and_larger_is_never_smaller() {
+        let s = long_song();
+        for (w, h) in [(80, 24), (120, 36), (200, 60), (300, 90)] {
+            for cycle in [Cycle::Listen, Cycle::Reveal] {
+                let mut last = 0;
+                for size in 1..=MAX_TEXT_SIZE {
+                    let (b, shown) = fit_song(&s, cycle, 10, size, &crate::theme::DARK, w, h);
+                    assert!(b.iter().map(height).sum::<u16>() <= h, "{w}x{h} size {size}");
+                    for blk in &b {
+                        let n = match blk {
+                            Blk::Big(t, _, PixelSize::Quadrant, _) => t.chars().count() * 4,
+                            Blk::Big(t, ..) => t.chars().count() * 8,
+                            Blk::Text(l) => l.width(),
+                            Blk::Gap(_) => 0,
+                        };
+                        assert!(n <= w as usize, "{w}x{h} size {size}: {n} wide");
+                    }
+                    assert!(shown >= last && shown <= size);
+                    last = shown;
+                }
+            }
+        }
+        assert_eq!(fit_song(&s, Cycle::Listen, 10, 5, &crate::theme::DARK, 300, 90).1, 5);
+    }
+
+    #[test]
+    fn wrapping_breaks_at_spaces_and_refuses_long_words() {
+        assert_eq!(wrap("ett två tre", 7).unwrap(), vec!["ett två", "tre"]);
+        assert_eq!(wrap("brädspelsklassiker", 15), None);
+        assert_eq!(plain_marks("A – B “c”"), "A - B \"c\"");
+    }
+
+    #[test]
+    fn text_size_is_saved_without_touching_other_changes_in_the_file() {
+        use crate::worker::{Library, Player};
+        let dir = std::env::temp_dir().join(format!("mq-size-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.quiz.toml");
+        let pl = Playlist { id: "P".into(), name: "Q".into(), folder: String::new(), smart: false, duration: 0.0, count: 0 };
+        let q = Quiz::new("Q", &pl, &[]);
+        // A file from before the setting existed gets the default.
+        let old = toml::to_string_pretty(&q.to_file()).unwrap().replace("text_size = 2\n", "");
+        assert!(!old.contains("text_size"));
+        std::fs::write(&path, old).unwrap();
+        let loaded = Quiz::load(&path).unwrap();
+        assert_eq!(loaded.meta.defaults.text_size, DEFAULT_TEXT_SIZE);
+        let ctx = Ctx { player: Player::spawn(), lib: Library::spawn(), theme: &crate::theme::DARK, glyphs: &crate::theme::UNICODE, tick: 0 };
+        let mut run = Run {
+            slides: slides(&loaded),
+            quiz: loaded,
+            path: path.clone(),
+            idx: 0,
+            setup: None,
+            hints: true,
+            blank: false,
+            jump: None,
+            play_at: None,
+            next_at: None,
+            seen_finished: 0,
+            played: false,
+            size_note: None,
+        };
+        let mut edited = Quiz::load(&path).unwrap();
+        edited.meta.title = "Changed elsewhere".into();
+        edited.save(&path).unwrap();
+        for _ in 0..9 {
+            run.key(KeyEvent::from(KeyCode::Char('+')), &ctx);
+        }
+        let back = Quiz::load(&path).unwrap();
+        assert_eq!((back.meta.defaults.text_size, back.meta.title.as_str()), (MAX_TEXT_SIZE, "Changed elsewhere"));
+        for _ in 0..9 {
+            run.key(KeyEvent::from(KeyCode::Char('-')), &ctx);
+        }
+        assert_eq!(Quiz::load(&path).unwrap().meta.defaults.text_size, 1);
+        run.key(KeyEvent::from(KeyCode::Char('0')), &ctx);
+        assert_eq!(Quiz::load(&path).unwrap().meta.defaults.text_size, DEFAULT_TEXT_SIZE);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Renders setup and a few slides of a copy of the real quiz, without playing.

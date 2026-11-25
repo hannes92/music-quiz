@@ -42,6 +42,9 @@ pub struct Defaults {
     /// Fade out the last seconds of each clip during the run.
     #[serde(default = "yes")]
     pub fade_out: bool,
+    /// Size of questions and answers in the run view, 1 to `MAX_TEXT_SIZE`.
+    #[serde(default = "default_text_size")]
+    pub text_size: u32,
     /// Prompt per question kind, overriding the built-in Swedish ones.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prompts: BTreeMap<String, String>,
@@ -54,9 +57,17 @@ impl Default for Defaults {
             rerun_length: 10,
             questions: vec!["artist".into(), "title".into()],
             fade_out: true,
+            text_size: DEFAULT_TEXT_SIZE,
             prompts: BTreeMap::new(),
         }
     }
+}
+
+pub const DEFAULT_TEXT_SIZE: u32 = 2;
+pub const MAX_TEXT_SIZE: u32 = 5;
+
+fn default_text_size() -> u32 {
+    DEFAULT_TEXT_SIZE
 }
 
 fn yes() -> bool {
