@@ -14,7 +14,7 @@ questions = [
     "title",
 ]
 fade_out = true
-text_size = 2
+text_size = 4
 
 [[round]]
 
@@ -43,7 +43,7 @@ clip_length = 45
 
 [[round.song.question]]
 kind = "custom"
-prompt = "Vilken är artisten och vad heter låten?"
+prompt = "Vilket är bandet och vad heter låten?"
 answer = "The Police – Message in a Bottle"
 points = 2.0
 
@@ -56,7 +56,7 @@ duration = 121
 
 [[round.song.question]]
 kind = "custom"
-prompt = "Vilken är artisten och vad heter låten?"
+prompt = "Vilket är bandet och vad heter låten?"
 answer = "Blur – Song 2"
 points = 2.0
 
@@ -76,23 +76,9 @@ points = 1.0
 
 [[round.song.question]]
 kind = "custom"
-prompt = "Vilken brädspelsklassiker handlar musikalen om?"
-answer = "Schack"
+prompt = "Två svenskar skrev musiken till musikalen. Vilken grupp är de kända ifrån?"
+answer = "ABBA (Benny Andersson och Björn Ulvaeus)"
 points = 1.0
-
-[[round.song]]
-track_id = "63179A4CD683DC4D"
-title = "Voodoo Child (Slight Return)"
-artist = "The Jimi Hendrix Experience"
-year = 1968
-duration = 313
-clip_length = 60
-
-[[round.song.question]]
-kind = "custom"
-prompt = "Vilken är artisten och vad heter låten?"
-answer = "Jimi Hendrix – Voodoo Child (Slight Return)"
-points = 2.0
 
 [[round.song]]
 track_id = "452ACDCA3F17D4E3"
@@ -129,20 +115,6 @@ answer = "Celine Dion – It's All Coming Back to Me Now"
 points = 2.0
 
 [[round.song]]
-track_id = "B2512883CFB81CAF"
-title = "Tonight's the Night (Gonna Be Alright)"
-artist = "Rod Stewart"
-year = 1976
-duration = 213
-clip_length = 40
-
-[[round.song.question]]
-kind = "custom"
-prompt = "Vilken är artisten och vad heter låten?"
-answer = "Rod Stewart – Tonight's the Night (Gonna Be Alright)"
-points = 2.0
-
-[[round.song]]
 track_id = "81AFBC4405A57893"
 title = "Chariots of Fire"
 artist = "Vangelis"
@@ -165,7 +137,7 @@ duration = 298
 
 [[round.song.question]]
 kind = "custom"
-prompt = "Vilken är artisten och vad heter låten?"
+prompt = "Vilket är bandet och vad heter låten?"
 answer = "Kool & The Gang – Celebration"
 points = 2.0
 
@@ -194,18 +166,18 @@ answer = "David Bowie – Golden Years"
 points = 2.0
 
 [[round.song]]
-track_id = "2DD305F3C981A9E1"
-title = "32"
-artist = "Mr. Mister"
-year = 1984
-duration = 278
+track_id = "9AAEE286E4B86A18"
+title = "Hey Jude"
+artist = "The Beatles"
+year = 1968
+duration = 431
 clip_length = 50
 
 [[round.song.question]]
 kind = "custom"
-prompt = "Vilken är artisten och vad heter låten?"
-answer = 'Mr. Mister – "32"'
-points = 2.0
+prompt = "Vilket är bandet, vad heter låten och på vilket skivbolag gavs den ut?"
+answer = 'The Beatles – "Hey Jude" – Apple Records'
+points = 3.0
 
 [[round.song]]
 track_id = "40F4FA0A0AC98C38"
@@ -219,6 +191,40 @@ clip_length = 40
 kind = "custom"
 prompt = "Vilken är artisten och till vilken film skrevs låten?"
 answer = "Ellie Goulding – Fifty Shades of Grey"
+points = 2.0
+
+[[round.song]]
+track_id = "01CF9BD3BD029059"
+title = "I Ran (So Far Away)"
+artist = "A Flock of Seagulls"
+year = 1982
+duration = 304
+clip_length = 45
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilket är bandet?"
+answer = "A Flock of Seagulls"
+points = 1.0
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vilket land gömmer sig i låtens titel?"
+answer = 'Iran ("I Ran (So Far Away)")'
+points = 1.0
+
+[[round.song]]
+track_id = "E31552CC0405DAB9"
+title = "Can't Help Falling In Love"
+artist = "Elvis Presley"
+year = 1961
+duration = 178
+clip_length = 45
+
+[[round.song.question]]
+kind = "custom"
+prompt = "Vad heter låten och vilket smeknamn har artisten?"
+answer = "Can't Help Falling in Love – The King / Kungen"
 points = 2.0
 
 [[round.song]]
